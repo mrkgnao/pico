@@ -282,24 +282,23 @@ stepRules tm =
 
   -- Congruence forms
 
-  congStep :: Lens' a Tm -> Prism' Tm a -> StepRule -> StepM Tm
-  congStep getTm pr s = review pr <$> do
+  congStep :: StepRule -> Lens' a Tm -> Prism' Tm a -> StepM Tm
+  congStep s getTm pr = review pr <$> do
     tm' <- match pr tm
     logR s tm
     getTm stepM tm'
 
-  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> StepRule -> StepM Tm
-  cong1 = congStep _1
+  cong1 :: Field1 a a Tm Tm => StepRule -> Prism' Tm a -> StepM Tm
+  cong1 s = congStep s _1
+  cong :: StepRule -> Prism' Tm Tm -> StepM Tm
+  cong s = congStep s id
 
-  cong :: Prism' Tm Tm -> StepRule -> StepM Tm
-  cong            = congStep id
+  s_App_Cong_Tm   = cong1 S_App_Cong_Tm _TmAppTm 
+  s_App_Cong_Co   = cong1 S_App_Cong_Co _TmAppCo 
+  s_Cast_Cong     = cong1 S_Cast_Cong _TmCast 
+  s_Case_Cong     = cong1 S_Case_Cong _TmCase 
 
-  s_App_Cong_Tm   = cong1 _TmAppTm S_App_Cong_Tm
-  s_App_Cong_Co   = cong1 _TmAppCo S_App_Cong_Co
-  s_Cast_Cong     = cong1 _TmCast S_Cast_Cong
-  s_Case_Cong     = cong1 _TmCase S_Case_Cong
-
-  s_Fix_Cong      = cong _TmFix S_Fix_Cong
+  s_Fix_Cong      = cong S_Fix_Cong _TmFix 
 
   -- TODO check value
   s_IrrelAbs_Cong = do
@@ -308,8 +307,8 @@ stepRules tm =
     s'        <- local (stepContext %~ (|> CtxTm a Irrel k)) (stepM s)
     pure (_TmIrrelLam # (k, bind a s'))
 
-  s_Binop_Left_Cong  = congStep _2 _TmPrimBinop S_Binop_Left_Cong
-  s_Binop_Right_Cong = congStep _3 _TmPrimBinop S_Binop_Right_Cong
+  s_Binop_Left_Cong  = congStep S_Binop_Left_Cong _2 _TmPrimBinop
+  s_Binop_Right_Cong = congStep S_Binop_Right_Cong _3 _TmPrimBinop
 
   -- Push rules
 
