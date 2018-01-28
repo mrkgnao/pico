@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 891833227fc66e8e23eb980706c0a057dc8cc802f73e5b9a56d4cfb9be94ccd6
+-- hash: e9b65e9a3679d7393e61dd0902407381a6c0699a1d7c7bbfe7e9852d2977fa82
 
 name:           edible
 version:        0.1.0.0
@@ -25,6 +25,7 @@ source-repository head
 executable edible
   main-is: Main.hs
   other-modules:
+      Edible.Prelude
       Pretty
       Types
       Paths_edible

@@ -20,14 +20,9 @@
 
 module Types where
 
-import           Control.Lens
-import           Control.Monad
-import           Data.Foldable
-import           Data.Typeable
-import           GHC.Generics
+import           Edible.Prelude
 import           Unbound.Generics.LocallyNameless
 import           Unbound.Generics.LocallyNameless.Internal.Fold (toListOf)
-import Control.Monad.Reader
 
 data DepQ = MatPi | UnMatPi
   deriving (Show, Generic, Typeable, Alpha, Eq, Subst a)
@@ -50,11 +45,20 @@ type Ty = Tm
 data HetEq = HetEq Ty Kd Kd Ty
   deriving (Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
 
-data BdrData = CtxTm TmVar !Rel !Kd | CtxCo CoVar !HetEq 
+data BdrData = CtxTm TmVar !Rel !Kd | CtxCo CoVar !HetEq
   deriving (Show, Generic, Typeable, Alpha)
 
 data Bdr a = BdTm !Rel !Kd (Bind TmVar a) | BdCo !HetEq (Bind CoVar a)
   deriving (Show, Generic, Typeable, Alpha)
+
+data PrimTy = TyInt | TyBool | TyChar
+  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+
+data PrimExp = ExpInt Int | ExpBool Bool | ExpChar Char
+  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+
+data PrimBinop = OpIntAdd | OpIntMul
+  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
 
 data Tm
   = TmVar TmVar
@@ -66,6 +70,9 @@ data Tm
   | TmFix Tm
   | TmAbsurd Co Tm
   | TmCase Ty Kd [Alt]
+  | TmPrimTy PrimTy
+  | TmPrimExp PrimExp
+  | TmPrimBinop PrimBinop Tm Tm
   deriving (Show, Generic, Typeable, Alpha, Subst Co)
 
 data Alt = Alt { _altPat :: !Pat, _altType :: !Ty }
@@ -119,10 +126,19 @@ makePrisms ''Rel
 makePrisms ''Tm
 makePrisms ''Co
 makePrisms ''Bdr
-makeLenses ''StepEnv
 makePrisms ''Alt
-makeLenses ''Alt
 makePrisms ''Pat
+makePrisms ''PrimTy
+makePrisms ''PrimExp
+makePrisms ''PrimBinop
+
+makeLenses ''StepEnv
+
+_TmExpInt :: Prism' Tm Int
+_TmExpInt = _TmPrimExp . _ExpInt
+
+tmExpInt :: Int -> Tm
+tmExpInt = review _TmExpInt
 
 _TmValue :: Prism' Tm Tm
 _TmValue = prism id $ \tm -> if runFreshM (go tm) then Right tm else Left tm
@@ -139,29 +155,57 @@ _TmValue = prism id $ \tm -> if runFreshM (go tm) then Right tm else Left tm
     _            -> pure False
 
 match :: MonadPlus m => Prism' a b -> a -> m b
-match p x = case x ^? p of
-  Just y  -> pure y
-  Nothing -> mzero
-
-eval :: Tm -> Tm
-eval tm = case step tm of
-  Nothing  -> tm
-  Just tm' -> eval tm'
+match p x = maybe mzero pure (x ^? p)
 
 type FreshT = FreshMT
-type StepM = FreshT (ReaderT StepEnv Maybe)
+type BaseM = ReaderT StepEnv (WriterT [String] Maybe)
+type StepM = FreshT BaseM
 
 env :: StepEnv
-env = StepEnv { _stepContext = [] }
+env = StepEnv {_stepContext = []}
 
-step :: Tm -> Maybe Tm
-step tm = runReaderT (stepR tm) env
+eval :: Tm -> IO ()
+eval tm = case step tm of
+  Nothing       -> print tm
+  Just (tm', l) -> do
+    traverse_ putStrLn l
+    eval tm'
 
-stepR :: Tm -> ReaderT StepEnv Maybe Tm
-stepR tm = runFreshMT (stepM tm)
+step :: Tm -> Maybe (Tm, [String])
+step tm = stepM tm & runFreshMT & flip runReaderT env & runWriterT
 
 stepM :: Tm -> StepM Tm
 stepM tm = asum (stepRules tm)
+
+logT :: String -> StepM ()
+logT s = tell [s]
+
+pptm :: Tm -> String
+-- pptm tm = "\n" ++ pptm' 0 tm ++ "\n" ++ pptmO tm
+pptm = pptm' 0
+
+-- pptmO :: Tm -> String
+-- pptmO = \case
+--   TmPrimExp (ExpInt x) -> show x
+--   TmPrimBinop OpIntAdd x y -> parens (pptmO x) ++ " + " ++ parens (pptmO y)
+--   TmPrimBinop OpIntMul x y -> parens (pptmO x) ++ " * " ++ parens (pptmO y)
+--   TmAppTm x y -> parens (pptmO x) ++ " " ++ parens (pptmO y)
+--   x -> parens (show x)
+--   where 
+--     parens x = "(" ++ x ++ ")" 
+
+pptm' :: Int -> Tm -> String
+pptm' d = \case
+  TmPrimExp (ExpInt x) -> show x
+  TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
+  TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
+  TmAppTm x y -> parensIf 11 (pptm' 12 x ++ " " ++ pptm' 12 y)
+  x -> parensIf 11 (show x)
+  where 
+    parensIf b x = if d > b then "(" ++ x ++ ")" else x
+
+logR :: String -> Tm -> StepM ()
+logR s tm = logT (s ++ ": " ++ pptm tm)
 
 stepRules :: Tm -> [StepM Tm]
 stepRules tm =
@@ -175,11 +219,28 @@ stepRules tm =
   , s_Case_Cong
   , s_Fix_Cong
   , s_IrrelAbs_Cong
+  , s_Binop_Left_Cong
+  , s_Binop_Right_Cong
+  , s_Prim_EvalIntAdd
+  , s_Prim_EvalIntMul
   , s_Trans
   ]
-
  where
-  s_BetaRel = do
+  stepIntBinop
+    :: String -> (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
+  stepIntBinop s f p = do
+    (op, l', r') <- match _TmPrimBinop tm
+    match p op
+    l <- match (_TmPrimExp . _ExpInt) l'
+    r <- match (_TmPrimExp . _ExpInt) r'
+    logR s tm
+    pure (_TmPrimExp # _ExpInt # f l r)
+
+  s_Prim_EvalIntAdd = stepIntBinop "s_Prim_EvalIntAdd" (+) _OpIntAdd
+  s_Prim_EvalIntMul = stepIntBinop "s_Prim_EvalIntMul" (*) _OpIntMul
+
+  s_BetaRel         = do
+    logR "s_BetaRel" tm
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmRelLam f
     substInto s1 s2
@@ -196,39 +257,45 @@ stepRules tm =
     substInto s g
 
   s_Unroll = do
-    t <- match _TmFix tm
+    t         <- match _TmFix tm
     (s, body) <- match _TmRelLam t
-    (v, b) <- unbind body
+    (v, b   ) <- unbind body
     pure (subst v tm b)
 
   -- Congruence forms
 
-  congruenceStep1 :: Prism' Tm Tm -> StepM Tm
-  congruenceStep1 pr = match pr tm >>= (review pr <$>) . stepM
+  congStep :: Lens' a Tm -> Prism' Tm a -> String -> StepM Tm
+  congStep getTm pr s = review pr <$> do
+    tm' <- match pr tm
+    logR s tm
+    getTm stepM tm'
 
-  congruenceStep :: Field1 a a Tm Tm => Prism' Tm a -> StepM Tm
-  congruenceStep pr = do
-    s  <- match pr tm
-    s' <- stepM (s ^. _1)
-    pure . review pr $ s & _1 .~ s'
+  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> String -> StepM Tm
+  cong1 = congStep _1
 
-  s_App_Cong_Tm = congruenceStep _TmAppTm
-  s_App_Cong_Co = congruenceStep _TmAppCo
-  s_Cast_Cong   = congruenceStep _TmCast
-  s_Case_Cong   = congruenceStep _TmCase
+  cong :: Prism' Tm Tm -> String -> StepM Tm
+  cong            = congStep id
 
-  s_Fix_Cong    = congruenceStep1 _TmFix
+  s_App_Cong_Tm   = cong1 _TmAppTm "s_App_Cong_Tm"
+  s_App_Cong_Co   = cong1 _TmAppCo "s_App_Cong_Co"
+  s_Cast_Cong     = cong1 _TmCast "s_Cast_Cong"
+  s_Case_Cong     = cong1 _TmCase "s_Case_Cong"
+
+  s_Fix_Cong      = cong _TmFix "s_Fix_Cong"
 
   -- TODO check value
   s_IrrelAbs_Cong = do
     (k, body) <- match _TmIrrelLam tm
-    (a, s) <- unbind body
-    s' <- local (stepContext %~ (|> CtxTm a Irrel k)) (stepM s)
+    (a, s   ) <- unbind body
+    s'        <- local (stepContext %~ (|> CtxTm a Irrel k)) (stepM s)
     pure (_TmIrrelLam # (k, bind a s'))
-  
+
+  s_Binop_Left_Cong  = congStep _2 _TmPrimBinop "s_Binop_Left_Cong"
+  s_Binop_Right_Cong = congStep _3 _TmPrimBinop "s_Binop_Right_Cong"
+
   -- Push rules
-  
-  s_Trans = do
+
+  s_Trans            = do
     (x, g2) <- match _TmCast tm
     (v, g1) <- match _TmCast x
     pure (_TmCast # (v, _CoTrans # (g1, g2)))
@@ -251,3 +318,21 @@ idTm = tlam Rel x (TmVar t) (TmVar x)
 appTm :: Tm
 appTm = TmAppTm idTm (TmVar (s2n "x"))
 
+six :: Tm
+six = TmAppTm
+  idTm
+  ( TmPrimBinop
+    OpIntAdd
+    ( TmPrimBinop
+      OpIntMul
+      ( TmPrimBinop OpIntAdd
+                    (tmExpInt 2)
+                    (TmPrimBinop OpIntMul (tmExpInt 6) (tmExpInt 2))
+      )
+      (tmExpInt 10)
+    )
+    (TmPrimBinop OpIntMul (tmExpInt 6) (tmExpInt 2))
+  )
+
+-- factTm :: Tm
+-- factTm = TmFix (TmLam

@@ -30,6 +30,7 @@ in
     deps = hsPkgs: with hsPkgs; [
       brittany
       ghc-mod
+      cabal-helper
 
       hpack
       ghcid
@@ -54,9 +55,9 @@ in
       free
       comonad
 
-      llvm-hs
-      llvm-hs-pure
-      llvm-hs-typed
+      # llvm-hs
+      # llvm-hs-pure
+      # llvm-hs-typed
 
       unbound-generics
     ];
@@ -70,6 +71,6 @@ in
     # Native dependencies
     nativeDeps = pkgs: with pkgs; [ 
       # z3 
-      llvm_5
+      # llvm_5
     ];
   }) // { shellHook = "source setup-ghcmod.sh"; } 
