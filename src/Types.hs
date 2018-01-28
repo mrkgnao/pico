@@ -204,8 +204,26 @@ pptm' d = \case
   where 
     parensIf b x = if d > b then "(" ++ x ++ ")" else x
 
-logR :: String -> Tm -> StepM ()
-logR s tm = logT (s ++ ": " ++ pptm tm)
+data StepRule
+  = S_BetaRel
+  | S_BetaIrrel
+  | S_CBeta
+  | S_Unroll
+  | S_App_Cong_Tm
+  | S_App_Cong_Co
+  | S_Cast_Cong
+  | S_Case_Cong
+  | S_Fix_Cong
+  | S_IrrelAbs_Cong
+  | S_Binop_Left_Cong
+  | S_Binop_Right_Cong
+  | S_Prim_EvalIntAdd
+  | S_Prim_EvalIntMul
+  | S_Trans
+  deriving Show
+
+logR :: StepRule -> Tm -> StepM ()
+logR s tm = logT (show s ++ ": " ++ pptm tm)
 
 stepRules :: Tm -> [StepM Tm]
 stepRules tm =
@@ -227,7 +245,7 @@ stepRules tm =
   ]
  where
   stepIntBinop
-    :: String -> (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
+    :: StepRule -> (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
   stepIntBinop s f p = do
     (op, l', r') <- match _TmPrimBinop tm
     match p op
@@ -236,11 +254,11 @@ stepRules tm =
     logR s tm
     pure (_TmPrimExp # _ExpInt # f l r)
 
-  s_Prim_EvalIntAdd = stepIntBinop "s_Prim_EvalIntAdd" (+) _OpIntAdd
-  s_Prim_EvalIntMul = stepIntBinop "s_Prim_EvalIntMul" (*) _OpIntMul
+  s_Prim_EvalIntAdd = stepIntBinop S_Prim_EvalIntAdd (+) _OpIntAdd
+  s_Prim_EvalIntMul = stepIntBinop S_Prim_EvalIntMul (*) _OpIntMul
 
   s_BetaRel         = do
-    logR "s_BetaRel" tm
+    logR S_BetaRel tm
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmRelLam f
     substInto s1 s2
@@ -264,24 +282,24 @@ stepRules tm =
 
   -- Congruence forms
 
-  congStep :: Lens' a Tm -> Prism' Tm a -> String -> StepM Tm
+  congStep :: Lens' a Tm -> Prism' Tm a -> StepRule -> StepM Tm
   congStep getTm pr s = review pr <$> do
     tm' <- match pr tm
     logR s tm
     getTm stepM tm'
 
-  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> String -> StepM Tm
+  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> StepRule -> StepM Tm
   cong1 = congStep _1
 
-  cong :: Prism' Tm Tm -> String -> StepM Tm
+  cong :: Prism' Tm Tm -> StepRule -> StepM Tm
   cong            = congStep id
 
-  s_App_Cong_Tm   = cong1 _TmAppTm "s_App_Cong_Tm"
-  s_App_Cong_Co   = cong1 _TmAppCo "s_App_Cong_Co"
-  s_Cast_Cong     = cong1 _TmCast "s_Cast_Cong"
-  s_Case_Cong     = cong1 _TmCase "s_Case_Cong"
+  s_App_Cong_Tm   = cong1 _TmAppTm S_App_Cong_Tm
+  s_App_Cong_Co   = cong1 _TmAppCo S_App_Cong_Co
+  s_Cast_Cong     = cong1 _TmCast S_Cast_Cong
+  s_Case_Cong     = cong1 _TmCase S_Case_Cong
 
-  s_Fix_Cong      = cong _TmFix "s_Fix_Cong"
+  s_Fix_Cong      = cong _TmFix S_Fix_Cong
 
   -- TODO check value
   s_IrrelAbs_Cong = do
@@ -290,8 +308,8 @@ stepRules tm =
     s'        <- local (stepContext %~ (|> CtxTm a Irrel k)) (stepM s)
     pure (_TmIrrelLam # (k, bind a s'))
 
-  s_Binop_Left_Cong  = congStep _2 _TmPrimBinop "s_Binop_Left_Cong"
-  s_Binop_Right_Cong = congStep _3 _TmPrimBinop "s_Binop_Right_Cong"
+  s_Binop_Left_Cong  = congStep _2 _TmPrimBinop S_Binop_Left_Cong
+  s_Binop_Right_Cong = congStep _3 _TmPrimBinop S_Binop_Right_Cong
 
   -- Push rules
 
