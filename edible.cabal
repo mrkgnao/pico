@@ -1,0 +1,52 @@
+-- This file has been generated from package.yaml by hpack version 0.21.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 891833227fc66e8e23eb980706c0a057dc8cc802f73e5b9a56d4cfb9be94ccd6
+
+name:           edible
+version:        0.1.0.0
+homepage:       https://github.com/mrkgnao/edible#readme
+bug-reports:    https://github.com/mrkgnao/edible/issues
+author:         Soham Chowdhury
+maintainer:     chow.soham@gmail.com
+license:        GPL-3
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
+
+extra-source-files:
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/mrkgnao/edible
+
+executable edible
+  main-is: Main.hs
+  other-modules:
+      Pretty
+      Types
+      Paths_edible
+  hs-source-dirs:
+      src
+  default-extensions: LambdaCase
+  build-depends:
+      QuickCheck
+    , adjunctions
+    , base
+    , bound
+    , comonad
+    , containers
+    , deriving-compat
+    , free
+    , hedgehog
+    , lens
+    , mtl
+    , prettyprinter
+    , prettyprinter-ansi-terminal
+    , text
+    , transformers
+    , unbound-generics
+    , vector
+  default-language: Haskell2010

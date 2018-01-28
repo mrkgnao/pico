@@ -1,0 +1,40 @@
+name: edible
+version: 0.1.0.0
+github: mrkgnao/edible
+synopsis: 
+description: 
+license: GPL-3
+license-file: LICENSE
+author: Soham Chowdhury
+maintainer: chow.soham@gmail.com
+copyright: 
+category: 
+build-type: Simple
+extra-source-files: 
+  - CHANGELOG.md
+
+executable:
+  main: Main.hs
+  source-dirs: src
+
+dependencies:
+  - base
+  - prettyprinter
+  - prettyprinter-ansi-terminal
+  - deriving-compat
+  - lens
+  - containers
+  - vector
+  - text
+  - mtl
+  - transformers
+  - hedgehog
+  - QuickCheck
+  - free
+  - comonad
+  - adjunctions
+  - bound
+  - unbound-generics
+
+default-extensions:
+  - LambdaCase
