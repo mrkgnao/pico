@@ -29,9 +29,7 @@ in
     # Haskell dependencies
     deps = hsPkgs: with hsPkgs; [
       brittany
-      Cabal
       ghc-mod
-      cabal-helper
 
       hpack
       ghcid
