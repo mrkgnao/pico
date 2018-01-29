@@ -89,7 +89,13 @@ data Co = CoVar CoVar | CoRefl Tm | CoSym Co | CoTrans Co Co
   deriving (Show, Generic, Typeable, Alpha, Subst Tm)
 
 data Konst = KTyCon String | KDtCon String | KType
-  deriving (Eq, Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+  deriving (Eq, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+
+instance Show Konst where
+  show = \case
+    KTyCon s -> s
+    KDtCon s -> "_" ++ s
+    KType -> "Type"
 
 instance Subst Tm Tm where
   isvar (TmVar v) = Just (SubstName v)
@@ -104,10 +110,6 @@ instance Subst Tm (Bdr Co)
 
 instance Subst Co (Bdr Co)
 instance Subst Co (Bdr Tm)
-
--- | \\ {r} (v : t) -> b
-tlam :: Rel -> TmVar -> Tm -> Tm -> Tm
-tlam r v t b = TmLam (BdTm r t (bind v b))
 
 _TmAppTm :: Prism' Tm (Tm, Tm)
 _TmAppTm = prism (\(f, x) -> TmApp f (TmArgTm x)) $ \case
@@ -137,6 +139,32 @@ _TmIrrelLam = _TmLamTm Irrel
 
 type Tele = [BdrData]
 data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
+
+pptm :: Tm -> String
+-- pptm tm = "\n" ++ pptm' 0 tm ++ "\n" ++ pptmO tm
+pptm = pptm' 0
+
+ppalt :: Int -> Alt -> String
+ppalt d (Alt (PatCon p) b) = show p ++ " -> " ++ show b
+  where 
+  parensIf b x = if d > b then "(" ++ x ++ ")" else x
+  parens x = "(" ++ x ++ ")"
+
+pptm' :: Int -> Tm -> String
+pptm' d = \case
+  TmPrimExp (ExpInt x)     -> show x
+  TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
+  TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
+  TmApp x (TmArgTm y)                -> parensIf 11 (parens (pptm x) ++ " " ++ parens (pptm y))
+  TmApp x (TmArgCo y)                -> parensIf 11 (parens (pptm x) ++ " " ++ parens (show y))
+  TmPrimTy TyInt -> "Int"
+  TmPrimTy TyBool -> "Bool"
+  TmConst (KDtCon x) ts -> parensIf 11 (x ++ " {" ++ unwords (map pptm ts) ++ "}")
+  TmCase t k alts -> "case " ++ pptm t ++ " at " ++ pptm k ++ " of \n" ++ unlines (map (ppalt 0) alts)
+  x                        -> parensIf 11 (show x)
+  where 
+  parensIf b x = if d > b then "(" ++ x ++ ")" else x
+  parens x = "(" ++ x ++ ")"
 
 -- makePrisms ''DepQ
 -- makePrisms ''Rel
@@ -172,7 +200,7 @@ _TmValue = prism id $ \tm -> if runFreshM (go tm) then Right tm else Left tm
     TmLam BdCo{} -> pure True
     _            -> pure False
 
-match :: MonadPlus m => Prism' a b -> a -> m b
+match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
 
 type FreshT = FreshMT
@@ -187,7 +215,7 @@ instance HasRecursionDepth StepEnv where
   recursionDepth = stepRecursionDepth
 
 eval :: Tm -> IO ()
-eval = go 0
+eval = go 1
  where
   go n tm = case step tm of
     Nothing       -> putStrLn (pptm tm)
@@ -206,10 +234,6 @@ stepM tm = asum (stepRules tm)
 logT :: String -> StepM ()
 logT s = tell [s]
 
-pptm :: Tm -> String
--- pptm tm = "\n" ++ pptm' 0 tm ++ "\n" ++ pptmO tm
-pptm = pptm' 0
-
 
 -- pptmO :: Tm -> String
 -- pptmO = \case
@@ -221,14 +245,6 @@ pptm = pptm' 0
 --   where
 --     parens x = "(" ++ x ++ ")"
 
-pptm' :: Int -> Tm -> String
-pptm' d = \case
-  TmPrimExp (ExpInt x)     -> show x
-  TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
-  TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
-  TmApp x y                -> parensIf 11 (pptm' 12 x ++ " " ++ show y)
-  x                        -> parensIf 11 (show x)
-  where parensIf b x = if d > b then "(" ++ x ++ ")" else x
 
 data StepRule
   = S_BetaRel
@@ -298,16 +314,19 @@ stepRules tm = map
 
   -- TODO check value
   s_BetaIrrel = do
+    logR S_BetaIrrel tm
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmIrrelLam f
     substInto s1 s2
 
   s_CBeta = do
+    logR S_CBeta tm
     (f, g) <- match _TmAppCo tm
     (_, s) <- match _TmLamCo f
     substInto s g
 
   s_Unroll = do
+    logR S_Unroll tm
     t         <- match _TmFix tm
     (s, body) <- match _TmRelLam t
     (v, b   ) <- unbind body
@@ -334,6 +353,7 @@ stepRules tm = map
 
   -- TODO check value
   s_IrrelAbs_Cong = do
+    logR S_IrrelAbs_Cong tm
     (k, body) <- match _TmIrrelLam tm
     (v, expr) <- unbind body
     s'        <- local (stepContext %~ (|> CtxTm v Irrel k)) (stepM expr)
@@ -349,6 +369,7 @@ stepRules tm = map
   -- Push rules
 
   s_Trans            = do
+    logR S_Trans tm
     (x, g2) <- match _TmCast tm
     (v, g1) <- match _TmCast x
     pure (_TmCast # (v, _CoTrans # (g1, g2)))
@@ -357,10 +378,13 @@ stepRules tm = map
     logR S_Match tm
     (scrutinee, _k, alts) <- match _TmCase tm
     (h', phis )           <- match _TmApps scrutinee
-    (h , _taus)           <- match _TmConst h'
-    -- FIXME no head
-    let t0 = head (filter (\alt -> alt ^. altPat == PatCon h) alts) ^. altBody
-    pure (_TmApps # (t0, phis))
+    (h , taus)            <- match _TmConst h'
+
+    let matchingAlts = filter (\alt -> alt ^. altPat == PatCon h) alts
+    firstMatch <- match _head matchingAlts
+    let t0 = firstMatch ^. altBody
+
+    pure (_TmApps # (t0, (_TmArgCo # _CoRefl # h') <| phis))
 
 _TmApps :: Iso' Tm (Tm, [TmArg])
 _TmApps = iso bw (uncurry fw)
@@ -401,27 +425,50 @@ constTm = tlam Rel x (TmVar s) (tlam Rel y (TmVar t) (TmVar x))
 appTm :: Tm
 appTm = _TmAppTm # (idTm, TmVar (s2n "x"))
 
-{-
+-- | \\ {r} (v : t) -> b
+tlam :: Rel -> TmVar -> Tm -> Tm -> Tm
+tlam r v t b = TmLam (BdTm r t (bind v b))
 
-  case Just 19 of       | case Just 19 of
-    Just x  -> 2 + x    |   Just    -> \(x : Int) -> 2 + x
-    Nothing -> (-1)     |   Nothing ->               (-1)
+-- | \\ {r} (v : t) -> b
+tcolam :: CoVar -> HetEq -> Tm -> Tm
+tcolam v eq b = TmLam (BdCo eq (bind v b))
 
+c :: CoVar
+c = s2n "c"
+
+{-  case Just 19 of       | case Just_{Int} 19 of
+      Just x  -> 2 + x    |   Just    -> \(c : Just_{Int} ~ Just_{Int}) -> 
+                                             \(x : Int) -> 
+                                              2 + x
 -}
 
 caseTm :: Tm
 caseTm = TmCase
-  -- (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 19)))
-  (TmConst nothing [TmPrimTy TyInt]) 
+  (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 19)))
+  -- (TmConst nothing [TmPrimTy TyInt]) 
   (TmPrimTy TyInt)
   [ Alt
-    (PatCon just)
-    (tlam Rel x (TmPrimTy TyInt) (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x)))
-  , Alt (PatCon nothing) (tmExpInt (-1))
+      (PatCon just)
+      ( tcolam c justEq
+        ( tlam Rel x
+               (TmPrimTy TyInt)
+               (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))))
+  -- , Alt (PatCon nothing) (tcolam c nothingEq (tmExpInt (-1)))
   ]
  where
-  just    = KDtCon "Just"
-  nothing = KDtCon "Nothing"
+  nothingEq = HetEq nothing' kmaybe' kmaybe' nothing'
+  justEq    = HetEq just' kmaybe' kmaybe' just'
+  just      = KDtCon "Just"
+  just'     = TmConst just [tyInt]
+  nothing   = KDtCon "Nothing"
+  nothing'  = TmConst nothing [tyInt]
+  kmaybe    = KTyCon "Maybe"
+  kmaybe'   = TmConst kmaybe [tyInt]
+
+listNil = KDtCon "ListNil"
+tyInt = TmPrimTy TyInt
+tyBool = TmPrimTy TyBool
+listIsEmpty = TmCase (TmConst listNil [tyInt]) tyBool []
 
 i2 :: Tm
 i2 = tmExpInt 2
