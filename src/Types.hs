@@ -61,10 +61,12 @@ data PrimExp = ExpInt Int | ExpBool Bool | ExpChar Char
 data PrimBinop = OpIntAdd | OpIntMul
   deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
 
+data TmArg = TmArgTm Tm | TmArgCo Co
+  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+
 data Tm
   = TmVar TmVar
-  | TmAppTm Tm Tm
-  | TmAppCo Tm Co
+  | TmApp Tm TmArg
   | TmPi DepQ (Bdr Tm)
   | TmLam (Bdr Tm)
   | TmCast Tm Co
@@ -107,6 +109,16 @@ instance Subst Co (Bdr Tm)
 tlam :: Rel -> TmVar -> Tm -> Tm -> Tm
 tlam r v t b = TmLam (BdTm r t (bind v b))
 
+_TmAppTm :: Prism' Tm (Tm, Tm)
+_TmAppTm = prism (\(f, x) -> TmApp f (TmArgTm x)) $ \case
+  TmApp f (TmArgTm x) -> Right (f, x)
+  x -> Left x
+
+_TmAppCo :: Prism' Tm (Tm, Co)
+_TmAppCo = prism (\(f, x) -> TmApp f (TmArgCo x)) $ \case
+  TmApp f (TmArgCo x) -> Right (f, x)
+  x -> Left x
+
 _TmLamCo :: Prism' Tm (HetEq, Bind CoVar Tm)
 _TmLamCo = prism (\(h, b) -> TmLam (BdCo h b)) $ \case
   TmLam (BdCo h b) -> Right (h, b)
@@ -129,6 +141,7 @@ data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
 -- makePrisms ''DepQ
 -- makePrisms ''Rel
 makePrisms ''Tm
+makePrisms ''TmArg
 makePrisms ''Co
 -- makePrisms ''Bdr
 makeLenses ''Alt
@@ -197,6 +210,7 @@ pptm :: Tm -> String
 -- pptm tm = "\n" ++ pptm' 0 tm ++ "\n" ++ pptmO tm
 pptm = pptm' 0
 
+
 -- pptmO :: Tm -> String
 -- pptmO = \case
 --   TmPrimExp (ExpInt x) -> show x
@@ -212,7 +226,7 @@ pptm' d = \case
   TmPrimExp (ExpInt x)     -> show x
   TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
   TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
-  TmAppTm x y              -> parensIf 11 (pptm' 12 x ++ " " ++ pptm' 12 y)
+  TmApp x y              -> parensIf 11 (pptm' 12 x ++ " " ++ show y)
   x                        -> parensIf 11 (show x)
   where parensIf b x = if d > b then "(" ++ x ++ ")" else x
 
@@ -372,7 +386,7 @@ constTm :: Tm
 constTm = tlam Rel x (TmVar s) (tlam Rel y (TmVar t) (TmVar x))
 
 appTm :: Tm
-appTm = TmAppTm idTm (TmVar (s2n "x"))
+appTm = _TmAppTm # (idTm, TmVar (s2n "x"))
 
 {-
 
