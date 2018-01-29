@@ -112,12 +112,12 @@ tlam r v t b = TmLam (BdTm r t (bind v b))
 _TmAppTm :: Prism' Tm (Tm, Tm)
 _TmAppTm = prism (\(f, x) -> TmApp f (TmArgTm x)) $ \case
   TmApp f (TmArgTm x) -> Right (f, x)
-  x -> Left x
+  x                   -> Left x
 
 _TmAppCo :: Prism' Tm (Tm, Co)
 _TmAppCo = prism (\(f, x) -> TmApp f (TmArgCo x)) $ \case
   TmApp f (TmArgCo x) -> Right (f, x)
-  x -> Left x
+  x                   -> Left x
 
 _TmLamCo :: Prism' Tm (HetEq, Bind CoVar Tm)
 _TmLamCo = prism (\(h, b) -> TmLam (BdCo h b)) $ \case
@@ -226,7 +226,7 @@ pptm' d = \case
   TmPrimExp (ExpInt x)     -> show x
   TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
   TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
-  TmApp x y              -> parensIf 11 (pptm' 12 x ++ " " ++ show y)
+  TmApp x y                -> parensIf 11 (pptm' 12 x ++ " " ++ show y)
   x                        -> parensIf 11 (show x)
   where parensIf b x = if d > b then "(" ++ x ++ ")" else x
 
@@ -274,7 +274,7 @@ stepRules tm = map
   , s_Prim_EvalIntAdd
   , s_Prim_EvalIntMul
   , s_Trans
-  , s_Match_1
+  , s_Match
   ]
  where
   stepIntBinop
@@ -353,13 +353,26 @@ stepRules tm = map
     (v, g1) <- match _TmCast x
     pure (_TmCast # (v, _CoTrans # (g1, g2)))
 
-  s_Match_1 = do
+  s_Match = do
     logR S_Match tm
     (scrutinee, _k, alts) <- match _TmCase tm
-    (h, phi')             <- match _TmConst scrutinee
-    phi                   <- maybe mzero pure (phi' ^? _head)
+    (h', phis )           <- match _TmApps scrutinee
+    (h , _taus)           <- match _TmConst h'
+    -- FIXME no head
     let t0 = head (filter (\alt -> alt ^. altPat == PatCon h) alts) ^. altBody
-    pure (_TmAppTm # (t0, phi))
+    pure (_TmApps # (t0, phis))
+
+_TmApps :: Iso' Tm (Tm, [TmArg])
+_TmApps = iso bw (uncurry fw)
+ where
+  fw :: Tm -> [TmArg] -> Tm
+  fw = foldl' (curry (review _TmApp))
+
+  bw :: Tm -> (Tm, [TmArg])
+  bw = \case
+    TmApp t arg@TmArgCo{} -> (t, [arg])
+    TmApp t arg@TmArgTm{} -> bw t & _2 %~ (|> arg)
+    tm -> (tm, [])
 
 substInto
   :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
@@ -398,7 +411,8 @@ appTm = _TmAppTm # (idTm, TmVar (s2n "x"))
 
 caseTm :: Tm
 caseTm = TmCase
-  (TmConst just [tmExpInt 19])
+  -- (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 19)))
+  (TmConst nothing [TmPrimTy TyInt]) 
   (TmPrimTy TyInt)
   [ Alt
     (PatCon just)
