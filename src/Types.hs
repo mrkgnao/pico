@@ -34,7 +34,7 @@ data Rel = Rel | Irrel
 -- data Arg =
 --   deriving (Show, Generic, Typeable)
 
--- data Alt
+-- data TmAlt
 --   deriving (Show, Generic, Typeable)
 
 type TmVar = Name Tm
@@ -64,7 +64,7 @@ data PrimBinop = OpIntAdd | OpIntMul
 data TmArg = TmArgTm Tm | TmArgCo Co
   deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
 
-data CoArg = CoArgTm Tm | CoArgCo Co
+data CoArg = CoArgTm Tm | CoArgCo Co | CoArgCoPair Co Co
   deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
 
 data Tm
@@ -72,30 +72,51 @@ data Tm
   | TmApp Tm TmArg
   | TmPi DepQ (Bdr Tm)
   | TmLam (Bdr Tm)
+  | TmConst Konst [Tm]
   | TmCast Tm Co
+  | TmCase Tm Kd [TmAlt]
   | TmFix Tm
   | TmAbsurd Co Tm
-  | TmCase Tm Kd [Alt]
   | TmPrimTy PrimTy
   | TmPrimExp PrimExp
   | TmPrimBinop PrimBinop Tm Tm
-  | TmConst Konst [Tm]
   deriving (Show, Generic, Typeable, Alpha, Subst Co)
 
-data Alt = Alt { _altPat :: Pat, _altBody :: Tm }
+data TmAlt = TmAlt { _tmAltPat :: Pat, _tmAltBody :: Tm }
   deriving (Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
 
 data Pat = PatWild | PatCon Konst
   deriving (Eq, Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+
+data CoAlt = CoAlt { _coAltPat :: Pat, _coAltBody :: Co }
+  deriving (Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+
+type Eta = Co
 
 data Co
   = CoVar CoVar
   | CoRefl Tm
   | CoSym Co
   | CoTrans Co Co
+  | CoConst Konst [Co]
+  | CoApp Co CoArg
+  | CoPi Rel Eta (Bind TmVar Co)
+  | CoCPi Eta Eta (Bind CoVar Co)
+  | CoCase Eta Co [CoAlt]
+  | CoFix Co
+  | CoLam Rel Eta (Bind TmVar Co)
+  | CoCApp Eta Eta (Bind CoVar Co)
+  | CoAbsurd Eta Eta Co
   | CoCoh Tm Co Tm
   | CoArgk Co
-  | CoApp Co CoArg
+  | CoArgkN Int Co
+  | CoRes Int Co
+  | CoIrrelApp Co CoArg
+  | CoNth Int Co
+  | CoLeft Eta Co
+  | CoRight Eta Co
+  | CoKind Co
+  | CoStep Tm
   deriving (Show, Generic, Typeable, Alpha, Subst Tm)
 
 data Konst = KTyCon String | KDtCon String | KType
@@ -154,8 +175,8 @@ pptm :: Tm -> String
 -- pptm tm = "\n" ++ pptm' 0 tm ++ "\n" ++ pptmO tm
 pptm = pptm' 0
 
-ppalt :: Int -> Alt -> String
-ppalt d (Alt (PatCon p) b) = show p ++ " -> " ++ show b
+pptmAlt :: Int -> TmAlt -> String
+pptmAlt d (TmAlt (PatCon p) b) = show p ++ " -> " ++ show b
  where
   parensIf b x = if d > b then "(" ++ x ++ ")" else x
   parens x = "(" ++ x ++ ")"
@@ -173,9 +194,9 @@ pptm' d = \case
   TmPrimTy TyBool -> "Bool"
   TmConst (KDtCon x) ts ->
     parensIf 11 (x ++ " {" ++ unwords (map pptm ts) ++ "}")
-  TmCase t k alts ->
+  TmCase t k tmAlts ->
     "case " ++ pptm t ++ " at " ++ pptm k ++ " of \n" ++ unlines
-      (map (ppalt 0) alts)
+      (map (pptmAlt 0) tmAlts)
   x -> parensIf 11 (show x)
  where
   parensIf b x = if d > b then "(" ++ x ++ ")" else x
@@ -188,7 +209,8 @@ makePrisms ''Co
 makePrisms ''TmArg
 makePrisms ''CoArg
 -- makePrisms ''Bdr
-makeLenses ''Alt
+makeLenses ''TmAlt
+makeLenses ''CoAlt
 -- makePrisms ''Pat
 makePrisms ''PrimTy
 makePrisms ''PrimExp
@@ -396,13 +418,13 @@ stepRules tm = map
 
   s_Match = do
     logR tm S_Match
-    (scrutinee, _k, alts) <- match _TmCase tm
+    (scrutinee, _k, tmAlts) <- match _TmCase tm
     (h', phis)            <- match _TmApps scrutinee
     (h , taus)            <- match _TmConst h'
 
-    let matchingAlts = filter (\alt -> alt ^. altPat == PatCon h) alts
-    firstMatch <- match _head matchingAlts
-    let t0 = firstMatch ^. altBody
+    let matchingTmAlts = filter (\tmAlt -> tmAlt ^. tmAltPat == PatCon h) tmAlts
+    firstMatch <- match _head matchingTmAlts
+    let t0 = firstMatch ^. tmAltBody
 
     pure (_TmApps # (t0, (_TmArgCo # _CoRefl # h') <| phis))
 
@@ -500,7 +522,7 @@ caseTm = TmCase
   (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 19)))
   -- (TmConst nothing [TmPrimTy TyInt]) 
   (TmPrimTy TyInt)
-  [ Alt
+  [ TmAlt
       (PatCon just)
       ( tcolam
         c
@@ -511,7 +533,7 @@ caseTm = TmCase
                (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))
         )
       )
-  -- , Alt (PatCon nothing) (tcolam c nothingEq (tmExpInt (-1)))
+  -- , TmAlt (PatCon nothing) (tcolam c nothingEq (tmExpInt (-1)))
   ]
  where
   nothingEq = HetEq nothing' kmaybe' kmaybe' nothing'
