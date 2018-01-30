@@ -343,7 +343,7 @@ stepRules tm = map
     match p op
     l <- match (_TmPrimExp . _ExpInt) l'
     r <- match (_TmPrimExp . _ExpInt) r'
-    pure (_TmPrimExp # _ExpInt # f l r)
+    pure (_TmPrimExp . _ExpInt # f l r)
 
   s_Prim_EvalIntAdd = stepIntBinop S_Prim_EvalIntAdd (+) _OpIntAdd
   s_Prim_EvalIntMul = stepIntBinop S_Prim_EvalIntMul (*) _OpIntMul
@@ -451,7 +451,7 @@ stepRules tm = map
           # ( _CoApp
               # ( g0
                 , _CoArgCo
-                # _CoCoh
+                . _CoCoh
                 # (_TmVar # a, g2, _TmCast # (_TmVar # a, g2))
                 )
             , _CoSym # g2
