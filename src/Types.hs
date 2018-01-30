@@ -64,6 +64,9 @@ data PrimBinop = OpIntAdd | OpIntMul
 data TmArg = TmArgTm Tm | TmArgCo Co
   deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
 
+data CoArg = CoArgTm Tm | CoArgCo Co
+  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+
 data Tm
   = TmVar TmVar
   | TmApp Tm TmArg
@@ -85,12 +88,14 @@ data Alt = Alt { _altPat :: Pat, _altBody :: Tm }
 data Pat = PatWild | PatCon Konst
   deriving (Eq, Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
 
-data Co 
-  = CoVar CoVar 
-  | CoRefl Tm 
-  | CoSym Co 
+data Co
+  = CoVar CoVar
+  | CoRefl Tm
+  | CoSym Co
   | CoTrans Co Co
   | CoCoh Tm Co Tm
+  | CoArgk Co
+  | CoApp Co CoArg
   deriving (Show, Generic, Typeable, Alpha, Subst Tm)
 
 data Konst = KTyCon String | KDtCon String | KType
@@ -151,7 +156,7 @@ pptm = pptm' 0
 
 ppalt :: Int -> Alt -> String
 ppalt d (Alt (PatCon p) b) = show p ++ " -> " ++ show b
-  where 
+ where
   parensIf b x = if d > b then "(" ++ x ++ ")" else x
   parens x = "(" ++ x ++ ")"
 
@@ -160,22 +165,28 @@ pptm' d = \case
   TmPrimExp (ExpInt x)     -> show x
   TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
   TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
-  TmApp x (TmArgTm y)                -> parensIf 11 (parens (pptm x) ++ " " ++ parens (pptm y))
-  TmApp x (TmArgCo y)                -> parensIf 11 (parens (pptm x) ++ " " ++ parens (show y))
-  TmPrimTy TyInt -> "Int"
+  TmApp x (TmArgTm y) ->
+    parensIf 11 (parens (pptm x) ++ " " ++ parens (pptm y))
+  TmApp x (TmArgCo y) ->
+    parensIf 11 (parens (pptm x) ++ " " ++ parens (show y))
+  TmPrimTy TyInt  -> "Int"
   TmPrimTy TyBool -> "Bool"
-  TmConst (KDtCon x) ts -> parensIf 11 (x ++ " {" ++ unwords (map pptm ts) ++ "}")
-  TmCase t k alts -> "case " ++ pptm t ++ " at " ++ pptm k ++ " of \n" ++ unlines (map (ppalt 0) alts)
-  x                        -> parensIf 11 (show x)
-  where 
+  TmConst (KDtCon x) ts ->
+    parensIf 11 (x ++ " {" ++ unwords (map pptm ts) ++ "}")
+  TmCase t k alts ->
+    "case " ++ pptm t ++ " at " ++ pptm k ++ " of \n" ++ unlines
+      (map (ppalt 0) alts)
+  x -> parensIf 11 (show x)
+ where
   parensIf b x = if d > b then "(" ++ x ++ ")" else x
   parens x = "(" ++ x ++ ")"
 
 -- makePrisms ''DepQ
 -- makePrisms ''Rel
 makePrisms ''Tm
-makePrisms ''TmArg
 makePrisms ''Co
+makePrisms ''TmArg
+makePrisms ''CoArg
 -- makePrisms ''Bdr
 makeLenses ''Alt
 -- makePrisms ''Pat
@@ -270,6 +281,7 @@ data StepRule
   | S_Trans
   | S_Match
   | S_APush
+  | S_FPush
   deriving Show
 
 logR :: Tm -> StepRule -> StepM ()
@@ -298,6 +310,7 @@ stepRules tm = map
   , s_Trans
   , s_Match
   , s_APush
+  , s_FPush
   ]
  where
   stepIntBinop
@@ -343,8 +356,8 @@ stepRules tm = map
 
   congStep :: StepRule -> Lens' a Tm -> Prism' Tm a -> StepM Tm
   congStep ruleName l pr = review pr <$> do
-    logR tm  ruleName
-    match pr       tm >>= l stepM
+    logR  tm ruleName
+    match pr tm >>= l stepM
 
   cong1 :: Field1 a a Tm Tm => StepRule -> Prism' Tm a -> StepM Tm
   cong1 s = congStep s _1
@@ -367,8 +380,8 @@ stepRules tm = map
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
-    logR tm  S_Binop_Double_Cong
-    match _TmPrimBinop        tm >>= _2 stepM >>= _3 stepM
+    logR  tm           S_Binop_Double_Cong
+    match _TmPrimBinop tm >>= _2 stepM >>= _3 stepM
 
   s_Binop_Left_Cong  = congStep S_Binop_Left_Cong _2 _TmPrimBinop
   s_Binop_Right_Cong = congStep S_Binop_Right_Cong _3 _TmPrimBinop
@@ -384,7 +397,7 @@ stepRules tm = map
   s_Match = do
     logR tm S_Match
     (scrutinee, _k, alts) <- match _TmCase tm
-    (h', phis )           <- match _TmApps scrutinee
+    (h', phis)            <- match _TmApps scrutinee
     (h , taus)            <- match _TmConst h'
 
     let matchingAlts = filter (\alt -> alt ^. altPat == PatCon h) alts
@@ -395,13 +408,36 @@ stepRules tm = map
 
   s_APush = do
     logR tm S_APush
-    (k, bd) <- match _TmIrrelLam tm
+    (k, bd  ) <- match _TmIrrelLam tm
     (a, body) <- unbind bd
-    (v, g) <- match _TmCast body
+    (v, g   ) <- match _TmCast body
     let t1 = undefined
         t2 = undefined
     let g2 = _CoCoh # (t1, _CoRefl # TmConst KType [], t2)
     undefined
+
+  s_FPush = do
+    logR tm S_FPush
+    castedLam    <- match _TmFix tm
+    (lam, g0   ) <- match _TmCast castedLam
+    (kd , bdr  ) <- match _TmRelLam lam
+    (a  , sigma) <- unbind bdr
+    let
+      g2 = _CoArgk # g0
+      g1 =
+        _CoTrans
+          # ( _CoApp
+              # ( g0
+                , _CoArgCo
+                # _CoCoh
+                # (_TmVar # a, g2, _TmCast # (_TmVar # a, g2))
+                )
+            , _CoSym # g2
+            )
+
+    let fixArg = _TmRelLam # (kd, bind a (_TmCast # (sigma, g1))) -- \(a : k) . (sigma |> g1)
+
+    pure (_TmCast # (_TmFix # fixArg, g2)) -- fix fixArg |> g2
 
 _TmApps :: Iso' Tm (Tm, [TmArg])
 _TmApps = iso bw (uncurry fw)
@@ -413,7 +449,7 @@ _TmApps = iso bw (uncurry fw)
   bw = \case
     TmApp t arg@TmArgCo{} -> (t, [arg])
     TmApp t arg@TmArgTm{} -> bw t & _2 %~ (|> arg)
-    tm -> (tm, [])
+    tm                    -> (tm, [])
 
 substInto
   :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
@@ -466,10 +502,15 @@ caseTm = TmCase
   (TmPrimTy TyInt)
   [ Alt
       (PatCon just)
-      ( tcolam c justEq
-        ( tlam Rel x
+      ( tcolam
+        c
+        justEq
+        ( tlam Rel
+               x
                (TmPrimTy TyInt)
-               (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))))
+               (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))
+        )
+      )
   -- , Alt (PatCon nothing) (tcolam c nothingEq (tmExpInt (-1)))
   ]
  where
