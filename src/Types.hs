@@ -85,7 +85,12 @@ data Alt = Alt { _altPat :: Pat, _altBody :: Tm }
 data Pat = PatWild | PatCon Konst
   deriving (Eq, Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
 
-data Co = CoVar CoVar | CoRefl Tm | CoSym Co | CoTrans Co Co
+data Co 
+  = CoVar CoVar 
+  | CoRefl Tm 
+  | CoSym Co 
+  | CoTrans Co Co
+  | CoCoh Tm Co Tm
   deriving (Show, Generic, Typeable, Alpha, Subst Tm)
 
 data Konst = KTyCon String | KDtCon String | KType
@@ -264,10 +269,11 @@ data StepRule
   | S_Prim_EvalIntMul
   | S_Trans
   | S_Match
+  | S_APush
   deriving Show
 
-logR :: StepRule -> Tm -> StepM ()
-logR s tm = do
+logR :: Tm -> StepRule -> StepM ()
+logR tm s = do
   depth <- view recursionDepth
   logT (concat (replicate depth "  ") ++ show s ++ ": " ++ pptm tm)
 
@@ -291,12 +297,13 @@ stepRules tm = map
   , s_Prim_EvalIntMul
   , s_Trans
   , s_Match
+  , s_APush
   ]
  where
   stepIntBinop
     :: StepRule -> (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
   stepIntBinop s f p = do
-    logR s tm
+    logR tm s
     (op, l', r') <- match _TmPrimBinop tm
     match p op
     l <- match (_TmPrimExp . _ExpInt) l'
@@ -307,26 +314,26 @@ stepRules tm = map
   s_Prim_EvalIntMul = stepIntBinop S_Prim_EvalIntMul (*) _OpIntMul
 
   s_BetaRel         = do
-    logR S_BetaRel tm
+    logR tm S_BetaRel
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmRelLam f
     substInto s1 s2
 
   -- TODO check value
   s_BetaIrrel = do
-    logR S_BetaIrrel tm
+    logR tm S_BetaIrrel
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmIrrelLam f
     substInto s1 s2
 
   s_CBeta = do
-    logR S_CBeta tm
+    logR tm S_CBeta
     (f, g) <- match _TmAppCo tm
     (_, s) <- match _TmLamCo f
     substInto s g
 
   s_Unroll = do
-    logR S_Unroll tm
+    logR tm S_Unroll
     t         <- match _TmFix tm
     (s, body) <- match _TmRelLam t
     (v, b   ) <- unbind body
@@ -336,7 +343,7 @@ stepRules tm = map
 
   congStep :: StepRule -> Lens' a Tm -> Prism' Tm a -> StepM Tm
   congStep ruleName l pr = review pr <$> do
-    logR  ruleName tm
+    logR tm  ruleName
     match pr       tm >>= l stepM
 
   cong1 :: Field1 a a Tm Tm => StepRule -> Prism' Tm a -> StepM Tm
@@ -353,14 +360,14 @@ stepRules tm = map
 
   -- TODO check value
   s_IrrelAbs_Cong = do
-    logR S_IrrelAbs_Cong tm
+    logR tm S_IrrelAbs_Cong
     (k, body) <- match _TmIrrelLam tm
     (v, expr) <- unbind body
     s'        <- local (stepContext %~ (|> CtxTm v Irrel k)) (stepM expr)
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
-    logR  S_Binop_Double_Cong tm
+    logR tm  S_Binop_Double_Cong
     match _TmPrimBinop        tm >>= _2 stepM >>= _3 stepM
 
   s_Binop_Left_Cong  = congStep S_Binop_Left_Cong _2 _TmPrimBinop
@@ -369,13 +376,13 @@ stepRules tm = map
   -- Push rules
 
   s_Trans            = do
-    logR S_Trans tm
+    logR tm S_Trans
     (x, g2) <- match _TmCast tm
     (v, g1) <- match _TmCast x
     pure (_TmCast # (v, _CoTrans # (g1, g2)))
 
   s_Match = do
-    logR S_Match tm
+    logR tm S_Match
     (scrutinee, _k, alts) <- match _TmCase tm
     (h', phis )           <- match _TmApps scrutinee
     (h , taus)            <- match _TmConst h'
@@ -385,6 +392,16 @@ stepRules tm = map
     let t0 = firstMatch ^. altBody
 
     pure (_TmApps # (t0, (_TmArgCo # _CoRefl # h') <| phis))
+
+  s_APush = do
+    logR tm S_APush
+    (k, bd) <- match _TmIrrelLam tm
+    (a, body) <- unbind bd
+    (v, g) <- match _TmCast body
+    let t1 = undefined
+        t2 = undefined
+    let g2 = _CoCoh # (t1, _CoRefl # TmConst KType [], t2)
+    undefined
 
 _TmApps :: Iso' Tm (Tm, [TmArg])
 _TmApps = iso bw (uncurry fw)
