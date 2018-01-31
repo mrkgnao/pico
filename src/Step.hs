@@ -210,7 +210,9 @@ stepRules tm = map
     logR tm S_IrrelAbs_Cong
     (k, body) <- match _TmIrrelLam tm
     (v, expr) <- unbind body
-    s'        <- local (stepContext %~ (|> CtxTm v Irrel k)) (stepM expr)
+    -- FIXME
+    -- s'        <- local (stepContext %~ (|> CtxTm v Irrel k)) (stepM expr)
+    s'        <- stepM expr
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
@@ -307,11 +309,11 @@ appTm = ((constTm $$ (constTm $$ idTm) $$ i2) $$ i3) $$ i4
 
 -- | \\ {r} (v : t) -> b
 tlam :: Rel -> TmVar -> Tm -> Tm -> Tm
-tlam r v t b = TmLam (BdTm r t (bind v b))
+tlam r v t b = TmLam (bind (BdrTm v (Embed r) (Embed t)) b)
 
 -- | \\ {r} (v : t) -> b
 tcolam :: CoVar -> HetEq -> Tm -> Tm
-tcolam v eq b = TmLam (BdCo eq (bind v b))
+tcolam v eq b = TmLam (bind (BdrCo v (Embed eq)) b)
 
 c :: CoVar
 c = s2n "c"

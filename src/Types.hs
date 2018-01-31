@@ -54,23 +54,16 @@ data TmArg = TmArgTm Tm | TmArgCo Co
 data CoArg = CoArgTm Tm | CoArgCo Co | CoArgCoPair Co Co
   deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
-data BdrData = CtxTm TmVar Rel Kd | CtxCo CoVar HetEq
-  deriving (Show, Generic, Alpha)
+data Bdr = BdrTm TmVar (Embed Rel) (Embed Kd) | BdrCo CoVar (Embed HetEq)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
-data Del = BdrTm TmVar Rel Kd | BdrCo CoVar HetEq
-  deriving (Show, Generic, Alpha)
-
-
-data Bdr a = BdTm Rel Kd (Bind TmVar a) | BdCo HetEq (Bind CoVar a)
-  deriving (Show, Generic, Alpha)
-
-type Tele = [BdrData]
+type Tele = [Bdr]
 
 data Tm
   = TmVar TmVar
   | TmApp Tm TmArg
-  | TmPi DepQ (Bdr Tm)
-  | TmLam (Bdr Tm)
+  | TmPi DepQ (Bind Bdr Tm)
+  | TmLam (Bind Bdr Tm)
   | TmConst Konst [Tm]
   | TmCast Tm Co
   | TmCase Tm Kd [TmAlt]
@@ -135,12 +128,6 @@ instance Subst Co Co where
   isvar (CoVar v) = Just (SubstName v)
   isvar _         = Nothing
 
-instance Subst Tm (Bdr Tm)
-instance Subst Tm (Bdr Co)
-
-instance Subst Co (Bdr Co)
-instance Subst Co (Bdr Tm)
-
 _TmAppTm :: Prism' Tm (Tm, Tm)
 _TmAppTm = prism (\(f, x) -> TmApp f (TmArgTm x)) $ \case
   TmApp f (TmArgTm x) -> Right (f, x)
@@ -152,14 +139,33 @@ _TmAppCo = prism (\(f, x) -> TmApp f (TmArgCo x)) $ \case
   x                   -> Left x
 
 _TmLamCo :: Prism' Tm (HetEq, Bind CoVar Tm)
-_TmLamCo = prism (\(h, b) -> TmLam (BdCo h b)) $ \case
-  TmLam (BdCo h b) -> Right (h, b)
-  x                -> Left x
+_TmLamCo = prism fw bw
+ where
+  fw (h, bd) = runFreshM $ do
+    (v, b) <- unbind bd
+    pure (TmLam (bind (BdrCo v (Embed h)) b))
+  bw t = case t of
+    TmLam bd -> runFreshM $ do
+      (vv, b) <- unbind bd
+      case vv of
+        BdrCo v (Embed h) -> pure (Right (h, bind v b))
+        _                 -> pure (Left t)
+    _ -> Left t
 
 _TmLamTm :: Rel -> Prism' Tm (Kd, Bind TmVar Tm)
-_TmLamTm r = prism (\(k, b) -> TmLam (BdTm r k b)) $ \case
-  TmLam (BdTm r' k b) | r == r' -> Right (k, b)
-  x                             -> Left x
+_TmLamTm rel = prism fw bw
+ where
+  fw (kd, bd) = runFreshM $ do
+    (v, b) <- unbind bd
+    pure (TmLam (bind (BdrTm v (Embed rel) (Embed kd)) b))
+  bw t = case t of
+    TmLam bd -> runFreshM $ do
+      (vv, b) <- unbind bd
+      case vv of
+        BdrTm v (Embed rel') (Embed kd) | rel == rel' -> pure
+          (Right (kd, bind v b))
+        _ -> pure (Left t)
+    _ -> Left t
 
 _TmRelLam :: Prism' Tm (Kd, Bind TmVar Tm)
 _TmRelLam = _TmLamTm Rel
@@ -175,7 +181,7 @@ makePrisms ''Tm
 makePrisms ''Co
 makePrisms ''TmArg
 makePrisms ''CoArg
--- makePrisms ''Bdr
+makePrisms ''Bdr
 makeLenses ''TmAlt
 makeLenses ''CoAlt
 -- makePrisms ''Pat
@@ -198,13 +204,13 @@ _TmValue = prism id $ \tm -> if runFreshM (go tm) then Right tm else Left tm
   go :: Tm -> FreshM Bool
   go x = case x of
     -- TODO add H case
-    TmPi{}                    -> pure True
-    TmLam (BdTm Rel   _ _   ) -> pure True
-    TmLam (BdTm Irrel _ body) -> do
-      (_, b) <- unbind body
-      go b
-    TmLam BdCo{} -> pure True
-    _            -> pure False
+    TmPi{} -> pure True
+    -- TmLam (BdrTm Rel   _ _   ) -> pure True
+    -- TmLam (BdrTm Irrel _ body) -> do
+    --   (_, b) <- unbind body
+    --   go b
+    -- TmLam BdrCo{} -> pure True
+    _      -> pure False
 
 _TmApps :: Iso' Tm (Tm, [TmArg])
 _TmApps = iso bw (uncurry fw)

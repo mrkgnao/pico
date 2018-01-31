@@ -28,6 +28,7 @@ import           Data.String
 
 import Types
 
+import qualified Unbound.Generics.LocallyNameless as U
 import qualified Unbound.Generics.LocallyNameless.Name as U
 import qualified Unbound.Generics.LocallyNameless.Bind as U
 
@@ -263,20 +264,20 @@ pprApp f x = parenise appPrec (assoc appPrec f <+> x)
 pprHetEq :: HetEq -> Doc
 pprHetEq (HetEq lt lk rk rt) = ppr lt <+> "~" <+> ppr rt
 
-pprBdr :: Pretty a => Bdr a -> Doc
-pprBdr = \case
-  BdTm rel kd (U.B p t) -> parenise
-    bdrPrec
-    (   "λ"
-    <+> varWrap rel (pprName' False p <+> ":" <+> ppr kd)
-    <+> "=>"
-    <+> nowrap (ppr t)
-    )
-  BdCo heq (U.B p t) -> parenise
-    bdrPrec
-    ( "λ" <+> parens (pprName' False p <+> ":" <+> ppr heq) <+> "=>" <+> nowrap
-      (ppr t)
-    )
+-- pprBdr :: Bdr -> Doc
+-- pprBdr = \case
+--   BdrTm (U.B p t) (U.Embed rel) (U.Embed kd) -> parenise
+--     bdrPrec
+--     (   "λ"
+--     <+> varWrap rel (pprName' False p <+> ":" <+> ppr kd)
+--     <+> "=>"
+--     <+> nowrap (ppr t)
+--     )
+--   BdrCo heq (U.B p t) -> parenise
+--     bdrPrec
+--     ( "λ" <+> parens (pprName' False p <+> ":" <+> ppr heq) <+> "=>" <+> nowrap
+--       (ppr t)
+--     )
 
 varWrap :: Rel -> DocEndo
 varWrap = \case
@@ -326,12 +327,21 @@ pprTm = \case
   TmPrimExp p        -> ppr p
   TmPrimBinop op l r -> pprBinopApp op l r
   TmVar v            -> ppr v
-  TmLam bd           -> pprBdr bd
-  TmApp f arg        -> pprApp (ppr f) (ppr arg)
-  TmCase tm kd alts  -> vcat
-    [ "case"
-    <+> brackets (ppr kd) <+> ppr tm
-    <+> "of"
+  TmLam (U.B (BdrTm p (U.Embed rel) (U.Embed kd)) t) -> parenise
+    bdrPrec
+    (   "λ"
+    <+> varWrap rel (pprName' False p <+> ":" <+> ppr kd)
+    <+> "=>"
+    <+> nowrap (ppr t)
+    )
+  TmLam (U.B (BdrCo p (U.Embed heq)) t) -> parenise
+    bdrPrec
+    ( "λ" <+> parens (pprName' False p <+> ":" <+> ppr heq) <+> "=>" <+> nowrap
+      (ppr t)
+    )
+  TmApp f arg       -> pprApp (ppr f) (ppr arg)
+  TmCase tm kd alts -> vcat
+    [ "case" <+> brackets (ppr kd) <+> ppr tm <+> "of"
     , indent 2 (vcat (map ppr alts))
     ]
   TmConst k  ts -> ppr k <+> braces (hsep (map ppr ts))
