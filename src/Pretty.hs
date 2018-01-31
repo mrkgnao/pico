@@ -14,7 +14,7 @@ import           Control.Lens
 import           Data.Foldable
 import           Data.Semigroup
 
-import           Data.Text.Prettyprint.Doc                 (Doc, backslash, dot,
+import           Data.Text.Prettyprint.Doc                 (backslash, dot,
                                                             pipe, pretty)
 import qualified Data.Text.Prettyprint.Doc                 as P
 import           Data.Text.Prettyprint.Doc.Render.Terminal
@@ -25,38 +25,39 @@ import qualified Data.Text.Lazy.IO                         as TL
 
 import           Control.Monad.Reader
 import           Data.String
-import Prelude hiding ((^^))
+import           Prelude hiding ((^^))
 
-type Out = Doc AnsiStyle
+import Types
 
-type OutM = PprM Out
+type Doc = P.Doc AnsiStyle
 
-type OutEndo = OutM -> OutM
+type DocM = PprM Doc
 
-type OutFold
-   = forall f. Foldable f =>
-                 f OutM -> OutM
+type PprE a = PprM a -> PprM a
+type PprF a = forall f. Foldable f => f (PprM a) -> PprM a
+
+type DocEndo = PprE Doc
+
+type DocFold = PprF Doc
 
 renderStdout :: Pretty a => a -> IO ()
 renderStdout = renderStdout' id
 
-renderStdout' :: Pretty a => (OutM -> OutM) -> a -> IO ()
+renderStdout' :: Pretty a => DocEndo -> a -> IO ()
 renderStdout' f = TL.putStrLn . renderText' f
 
-renderText'' :: Pretty a => Bool -> (OutM -> OutM) -> a -> TL.Text
+renderText'' :: Pretty a => Bool -> DocEndo -> a -> TL.Text
 renderText'' c f =
-  TL.replace "\\e" "\ESC" .
-  renderLazy .
-  P.layoutPretty layoutOpts .
-  runPprM .
-  (if c
-     then id
-     else fmap P.unAnnotate) .
-  f . ppr
-  where
-    layoutOpts = P.LayoutOptions (P.AvailablePerLine 110 1.0)
+  TL.replace "\\e" "\ESC"
+    . renderLazy
+    . P.layoutPretty layoutOpts
+    . runPprM
+    . (if c then id else fmap P.unAnnotate)
+    . f
+    . ppr
+  where layoutOpts = P.LayoutOptions (P.AvailablePerLine 110 1.0)
 
-renderText' :: Pretty a => (OutM -> OutM) -> a -> TL.Text
+renderText' :: Pretty a => DocEndo -> a -> TL.Text
 renderText' = renderText'' True
 
 renderText :: Pretty a => a -> TL.Text
@@ -68,66 +69,66 @@ renderString = TL.unpack . renderText
 renderPlainString :: Pretty a => a -> String
 renderPlainString = TL.unpack . renderText'' False id
 
-liftOutM :: (Foldable t) => ([a] -> b) -> t (PprM a) -> PprM b
-liftOutM f = fmap f . sequence . toList
+liftDocM :: (Foldable t) => ([a] -> b) -> t (PprM a) -> PprM b
+liftDocM f = fmap f . sequence . toList
 
-listed :: OutFold
-listed = liftOutM P.list
+listed :: DocFold
+listed = liftDocM P.list
 
-sep, vsep, hsep, fsep :: OutFold
-sep = liftOutM P.sep
-vsep = liftOutM P.vsep
-hsep = liftOutM P.hsep
-fsep = liftOutM P.fillSep
+sep, vsep, hsep, fsep :: DocFold
+sep = liftDocM P.sep
+vsep = liftDocM P.vsep
+hsep = liftDocM P.hsep
+fsep = liftDocM P.fillSep
 
-cat, vcat, hcat, fcat :: OutFold
-cat = liftOutM P.cat
-vcat = liftOutM P.vcat
-hcat = liftOutM P.hcat
-fcat = liftOutM P.fillCat
+cat, vcat, hcat, fcat :: DocFold
+cat = liftDocM P.cat
+vcat = liftDocM P.vcat
+hcat = liftDocM P.hcat
+fcat = liftDocM P.fillCat
 
-group :: OutEndo
+group :: DocEndo
 group = fmap P.group
 
-annotate :: AnsiStyle -> OutEndo
+annotate :: AnsiStyle -> DocEndo
 annotate = fmap . P.annotate
 
-unAnnotate :: OutEndo
+unAnnotate :: DocEndo
 unAnnotate = fmap P.unAnnotate
 
-parens, angles, braces, brackets :: OutEndo
+parens, angles, braces, brackets :: DocEndo
 parens = fmap P.parens
 angles = fmap P.angles
 brackets = fmap P.brackets
 braces = fmap P.braces
 
-align :: OutEndo
+align :: DocEndo
 align = fmap P.align
 
-fill :: Int -> OutEndo
+fill :: Int -> DocEndo
 fill = fmap . P.fill
 
-indent :: Int -> OutEndo
+indent :: Int -> DocEndo
 indent = fmap . P.indent
 
-nest :: Int -> OutEndo
+nest :: Int -> DocEndo
 nest = fmap . P.nest
 
-hang :: Int -> OutEndo
+hang :: Int -> DocEndo
 hang = fmap . P.hang
 
-column :: (Int -> PprM Out) -> PprM Out
+column :: (Int -> PprM Doc) -> PprM Doc
 column f = PprM (\env -> P.column (pprWithEnv env . f))
 
-nesting :: (Int -> PprM Out) -> PprM Out
+nesting :: (Int -> PprM Doc) -> PprM Doc
 nesting f = PprM (\env -> P.nesting (pprWithEnv env . f))
 
-punctuate :: Out -> [Out] -> [OutM]
+punctuate :: Doc -> [Doc] -> [DocM]
 punctuate o = fmap pure . P.punctuate o
 
 infixr 5 <+>
 
-(<+>) :: OutM -> OutM -> OutM
+(<+>) :: DocM -> DocM -> DocM
 (<+>) = liftA2 (P.<+>)
 
 globalIndentWidth :: Int
@@ -138,7 +139,8 @@ newtype PprEnv = PprEnv
   }
 
 precedence :: Lens' PprEnv Int
-precedence = lens _pprEnv_precedence (\e prec -> e {_pprEnv_precedence = prec})
+precedence =
+  lens _pprEnv_precedence (\e prec -> e { _pprEnv_precedence = prec })
 
 newtype PprM a = PprM
   { unPprM :: PprEnv -> a
@@ -148,50 +150,41 @@ pprWithEnv :: PprEnv -> PprM a -> a
 pprWithEnv = flip unPprM
 
 runPprM :: PprM a -> a
-runPprM f = unPprM f iEnv
-  where
-    iEnv = PprEnv (-1)
+runPprM f = unPprM f iEnv where iEnv = PprEnv (-1)
 
-assoc :: Int -> PprM a -> PprM a
+assoc :: Int -> PprE a
 assoc p = local (precedence .~ p)
 
-pprPure :: Pretty a => a -> Out
+pprPure :: Pretty a => a -> Doc
 pprPure = runPprM . ppr
 
-wrapOn :: Bool -> (PprM a -> PprM a) -> PprM a -> PprM a
-wrapOn c f =
-  if c
-    then f
-    else id
+wrapOn :: Bool -> PprE a -> PprE a
+wrapOn c f = if c then f else id
 {-# INLINE wrapOn #-}
-above :: Int -> (PprM a -> PprM a) -> PprM a -> PprM a
+
+above :: Int -> PprE a -> PprE a
 above p f m = do
   outerPrec <- view precedence
   wrapOn (outerPrec > p) f (assoc (p + 1) m)
 
-nowrap :: PprM a -> PprM a
+nowrap :: PprE a
 nowrap = assoc (-1)
+
+parenise prec body = above prec parens body
 
 infixr 8 %%
 (%%) = assoc
 
 infixr 8 ^^
-prec ^^ body = above prec parens body
+(^^) = parenise
 
 class Pretty a where
-  ppr :: a -> OutM
+  ppr :: a -> DocM
 
-class Pretty1 f where
-  liftPpr :: (a -> OutM) -> f a -> OutM
-
-  ppr1 :: Pretty a => f a -> OutM
-  ppr1 = liftPpr ppr
-
-instance IsString OutM where fromString = pure . fromString
-
-instance Pretty1 Identity where
-  liftPpr pp (Identity a) = 10 ^^ ("Identity" <+> 11 %% pp a)
+instance IsString DocM where fromString = pure . fromString
 
 instance Pretty Char where ppr = fromString . show
 
-instance (Pretty1 f, Pretty a) => Pretty (f a) where ppr = ppr1
+instance Pretty String where ppr = fromString
+
+instance Pretty TL.Text where ppr = fromString . TL.unpack

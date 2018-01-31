@@ -23,19 +23,13 @@ module Types where
 import           Edible.Prelude
 import           Unbound.Generics.LocallyNameless
 import           Unbound.Generics.LocallyNameless.Internal.Fold (toListOf)
-import Control.Monad.Trans
+import           Control.Monad.Trans
 
 data DepQ = MatPi | UnMatPi
   deriving (Show, Generic, Typeable, Alpha, Eq, Subst a)
 
 data Rel = Rel | Irrel
   deriving (Show, Generic, Typeable, Alpha, Eq, Subst a)
-
--- data Arg =
---   deriving (Show, Generic, Typeable)
-
--- data TmAlt
---   deriving (Show, Generic, Typeable)
 
 type TmVar = Name Tm
 type CoVar = Name Co
