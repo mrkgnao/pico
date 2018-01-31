@@ -131,6 +131,9 @@ infixr 5 <+>
 (<+>) :: DocM -> DocM -> DocM
 (<+>) = liftA2 (P.<+>)
 
+instance Semigroup a => Semigroup (PprM a) where
+  (<>) = liftA2 (P.<>)
+
 globalIndentWidth :: Int
 globalIndentWidth = 4
 
@@ -183,8 +186,33 @@ class Pretty a where
 
 instance IsString DocM where fromString = pure . fromString
 
+instance Pretty Bool where ppr = fromString . show
 instance Pretty Char where ppr = fromString . show
+instance Pretty Int where ppr = fromString . show
+instance Pretty Double where ppr = fromString . show
+instance Pretty Float where ppr = fromString . show
 
 instance Pretty String where ppr = fromString
 
 instance Pretty TL.Text where ppr = fromString . TL.unpack
+
+instance Pretty PrimTy where ppr = pprPrimTy
+instance Pretty PrimExp where ppr = pprPrimExp
+instance Pretty PrimBinop where ppr = pprPrimBinop
+
+pprPrimBinop :: PrimBinop -> DocM
+pprPrimBinop = \case
+  OpIntAdd -> "+#"
+  OpIntMul -> "*#"
+
+pprPrimTy :: PrimTy -> DocM
+pprPrimTy = \case
+  TyInt -> "Int#"
+  TyBool -> "Bool#"
+  TyChar -> "Char#"
+
+pprPrimExp :: PrimExp -> DocM
+pprPrimExp = \case
+  ExpInt i -> pprPrimTy TyInt <+> ppr i <> "#"
+  ExpBool b -> pprPrimTy TyBool <+> ppr b <> "#"
+  ExpChar c -> pprPrimTy TyChar <+> ppr c <> "#"

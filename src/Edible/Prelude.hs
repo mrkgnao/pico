@@ -49,6 +49,7 @@ import qualified Data.Text                   as Text
 
 import           Data.Typeable               as X (Typeable)
 import           GHC.Generics                as X (Generic)
+import Data.Int as X
 
 (>>>) :: (a -> b) -> (b -> c) -> a -> c
 (>>>) = (Control.Category.>>>)
