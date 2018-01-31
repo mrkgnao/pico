@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f91e91de700557bb1fe48d33c14f9f6c0d90d929d5c9fc592e5077b8f399f940
+-- hash: 77efec2208c83650bacc1816362c9fed946436500c2a3af48449a301bd6de477
 
 name:           edible
 version:        0.1.0.0
@@ -28,6 +28,7 @@ executable edible
       Edible.Prelude
       PatArr
       Pretty
+      Step
       Types
       Paths_edible
   hs-source-dirs:
