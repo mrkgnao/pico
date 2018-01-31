@@ -57,7 +57,14 @@ data CoArg = CoArgTm Tm | CoArgCo Co | CoArgCoPair Co Co
 data Bdr = BdrTm TmVar (Embed Rel) (Embed Kd) | BdrCo CoVar (Embed HetEq)
   deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
-type Tele = [Bdr]
+data Tele = TeleNil | TeleBind (Rebind Bdr Tele)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
+
+teleSnoc :: Bdr -> Tele -> Tele
+teleSnoc x = \case
+  TeleNil -> TeleBind (rebind x TeleNil)
+  TeleBind b -> TeleBind (rebind bdr (teleSnoc x tele))
+    where (bdr, tele) = unrebind b
 
 data Tm
   = TmVar TmVar
@@ -155,16 +162,13 @@ _TmLamCo = prism fw bw
 _TmLamTm :: Rel -> Prism' Tm (Kd, Bind TmVar Tm)
 _TmLamTm rel = prism fw bw
  where
-  fw (kd, bd) = runFreshM $ do
-    (v, b) <- unbind bd
+  fw (kd, bd) = runLFreshM . lunbind bd $ \(v, b) ->
     pure (TmLam (bind (BdrTm v (Embed rel) (Embed kd)) b))
   bw t = case t of
-    TmLam bd -> runFreshM $ do
-      (vv, b) <- unbind bd
-      case vv of
-        BdrTm v (Embed rel') (Embed kd) | rel == rel' -> pure
-          (Right (kd, bind v b))
-        _ -> pure (Left t)
+    TmLam bd -> runLFreshM . lunbind bd $ \(vv, b) -> case vv of
+      BdrTm v (Embed rel') (Embed kd) | rel == rel' -> pure
+        (Right (kd, bind v b))
+      _ -> pure (Left t)
     _ -> Left t
 
 _TmRelLam :: Prism' Tm (Kd, Bind TmVar Tm)
@@ -173,7 +177,15 @@ _TmRelLam = _TmLamTm Rel
 _TmIrrelLam :: Prism' Tm (Kd, Bind TmVar Tm)
 _TmIrrelLam = _TmLamTm Irrel
 
-data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
+_BdrTm :: Prism' Bdr (TmVar, Rel, Kd)
+_BdrTm = prism (\(t, r, k) -> (BdrTm t (Embed r) (Embed k))) $ \case
+  BdrTm t (Embed r) (Embed k) -> Right (t, r, k)
+  x                           -> Left x
+
+_BdrCo :: Prism' Bdr (CoVar, HetEq)
+_BdrCo = prism (\(t, h) -> (BdrCo t (Embed h))) $ \case
+  BdrCo t (Embed h) -> Right (t, h)
+  x                 -> Left x
 
 -- makePrisms ''DepQ
 -- makePrisms ''Rel
@@ -181,15 +193,12 @@ makePrisms ''Tm
 makePrisms ''Co
 makePrisms ''TmArg
 makePrisms ''CoArg
-makePrisms ''Bdr
 makeLenses ''TmAlt
 makeLenses ''CoAlt
 -- makePrisms ''Pat
 makePrisms ''PrimTy
 makePrisms ''PrimExp
 makePrisms ''PrimBinop
-
-makeLenses ''StepEnv
 
 ------------------------------------------------------------
 -- Useful prisms

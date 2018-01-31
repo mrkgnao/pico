@@ -67,15 +67,18 @@ type BaseT m = ReaderT StepEnv (WriterT [Doc] m)
 type BaseM = BaseT Maybe
 type StepM = FreshT BaseM
 
+data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
+makeLenses ''StepEnv
+
 env :: StepEnv
-env = StepEnv {_stepContext = [], _stepRecursionDepth = 0}
+env = StepEnv {_stepContext = TeleNil, _stepRecursionDepth = 0}
 
 instance HasRecursionDepth StepEnv where
   recursionDepth = stepRecursionDepth
 
 eval :: Tm -> IO ()
 eval = go 0
-  where
+ where
   go 0 tm = do
     renderStdout tm
     go 1 tm
@@ -210,9 +213,7 @@ stepRules tm = map
     logR tm S_IrrelAbs_Cong
     (k, body) <- match _TmIrrelLam tm
     (v, expr) <- unbind body
-    -- FIXME
-    -- s'        <- local (stepContext %~ (|> CtxTm v Irrel k)) (stepM expr)
-    s'        <- stepM expr
+    s'        <- local (stepContext %~ teleSnoc (_BdrTm # (v, Irrel, k))) (stepM expr)
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
@@ -330,16 +331,16 @@ caseTm = TmCase
   -- (TmConst nothing [TmPrimTy TyInt]) 
   (TmPrimTy TyInt)
   [ TmAlt
-      (PatCon just)
-      ( tcolam
-        c
-        justEq
-        ( tlam Rel
-               x
-               (TmPrimTy TyInt)
-               (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))
-        )
+    (PatCon just)
+    ( tcolam
+      c
+      justEq
+      ( tlam Rel
+             x
+             (TmPrimTy TyInt)
+             (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))
       )
+    )
   , TmAlt (PatCon nothing) (tcolam c nothingEq (tmExpInt (-1)))
   ]
  where
@@ -377,3 +378,8 @@ add = TmPrimBinop OpIntAdd
 infixl 7 `mul`
 mul = TmPrimBinop OpIntMul
 
+tele :: Tele
+tele =
+  TeleBind $ rebind (BdrTm x (Embed Rel) (Embed (TmVar x))) $ TeleBind $ rebind
+    (BdrTm y (Embed Irrel) (Embed (TmVar y)))
+    TeleNil
