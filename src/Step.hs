@@ -379,7 +379,7 @@ infixl 7 `mul`
 mul = TmPrimBinop OpIntMul
 
 tele :: Tele
-tele =
-  TeleBind $ rebind (BdrTm x (Embed Rel) (Embed (TmVar x))) $ TeleBind $ rebind
-    (BdrTm y (Embed Irrel) (Embed (TmVar y)))
-    TeleNil
+tele = TeleBind $ rebind (BdrTm x (Embed Rel) (Embed (TmVar x))) $ TeleNil
+
+bdr :: Bdr
+bdr = BdrTm y (Embed Irrel) (Embed (TmVar x))

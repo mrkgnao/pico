@@ -66,6 +66,17 @@ teleSnoc x = \case
   TeleBind b -> TeleBind (rebind bdr (teleSnoc x tele))
     where (bdr, tele) = unrebind b
 
+relevTele :: Tele -> Tele
+relevTele = \case
+  TeleNil -> TeleNil
+  TeleBind b -> TeleBind $ rebind (relevBdr bdr) (relevTele rest)
+    where (bdr, rest) = unrebind b
+
+relevBdr :: Bdr -> Bdr
+relevBdr = \case
+  b@BdrCo{} -> b
+  BdrTm v _ (Embed k) -> BdrTm v (Embed Rel) (Embed k)
+
 data Tm
   = TmVar TmVar
   | TmApp Tm TmArg
