@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveAnyClass            #-}
-{-# LANGUAGE DeriveDataTypeable        #-}
 {-# LANGUAGE DeriveFoldable            #-}
 {-# LANGUAGE DeriveFunctor             #-}
 {-# LANGUAGE DeriveGeneric             #-}
@@ -26,10 +25,10 @@ import           Unbound.Generics.LocallyNameless.Internal.Fold (toListOf)
 import           Control.Monad.Trans
 
 data DepQ = MatPi | UnMatPi
-  deriving (Show, Generic, Typeable, Alpha, Eq, Subst a)
+  deriving (Show, Generic, Alpha, Eq, Subst a)
 
 data Rel = Rel | Irrel
-  deriving (Show, Generic, Typeable, Alpha, Eq, Subst a)
+  deriving (Show, Generic, Alpha, Eq, Subst a)
 
 type TmVar = Name Tm
 type CoVar = Name Co
@@ -38,28 +37,28 @@ type Kd = Tm
 type Ty = Tm
 
 data HetEq = HetEq Ty Kd Kd Ty
-  deriving (Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+  deriving (Show, Generic, Alpha, Subst Tm, Subst Co)
 
 data BdrData = CtxTm TmVar Rel Kd | CtxCo CoVar HetEq
-  deriving (Show, Generic, Typeable, Alpha)
+  deriving (Show, Generic, Alpha)
 
 data Bdr a = BdTm Rel Kd (Bind TmVar a) | BdCo HetEq (Bind CoVar a)
-  deriving (Show, Generic, Typeable, Alpha)
+  deriving (Show, Generic, Alpha)
 
 data PrimTy = TyInt | TyBool | TyChar
-  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
 data PrimExp = ExpInt Int | ExpBool Bool | ExpChar Char
-  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
 data PrimBinop = OpIntAdd | OpIntMul
-  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
 data TmArg = TmArgTm Tm | TmArgCo Co
-  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
 data CoArg = CoArgTm Tm | CoArgCo Co | CoArgCoPair Co Co
-  deriving (Show, Generic, Typeable, Alpha, Subst Co, Subst Tm)
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
 data Tm
   = TmVar TmVar
@@ -74,16 +73,16 @@ data Tm
   | TmPrimTy PrimTy
   | TmPrimExp PrimExp
   | TmPrimBinop PrimBinop Tm Tm
-  deriving (Show, Generic, Typeable, Alpha, Subst Co)
+  deriving (Show, Generic, Alpha, Subst Co)
 
 data TmAlt = TmAlt { _tmAltPat :: Pat, _tmAltBody :: Tm }
-  deriving (Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+  deriving (Show, Generic, Alpha, Subst Tm, Subst Co)
 
 data Pat = PatWild | PatCon Konst
-  deriving (Eq, Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+  deriving (Eq, Show, Generic, Alpha, Subst Tm, Subst Co)
 
 data CoAlt = CoAlt { _coAltPat :: Pat, _coAltBody :: Co }
-  deriving (Show, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+  deriving (Show, Generic, Alpha, Subst Tm, Subst Co)
 
 type Eta = Co
 
@@ -111,10 +110,10 @@ data Co
   | CoRight Eta Co
   | CoKind Co
   | CoStep Tm
-  deriving (Show, Generic, Typeable, Alpha, Subst Tm)
+  deriving (Show, Generic, Alpha, Subst Tm)
 
 data Konst = KTyCon String | KDtCon String | KType
-  deriving (Eq, Generic, Typeable, Alpha, Subst Tm, Subst Co)
+  deriving (Eq, Generic, Alpha, Subst Tm, Subst Co)
 
 instance Show Konst where
   show = \case
