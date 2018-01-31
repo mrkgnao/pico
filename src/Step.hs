@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveAnyClass            #-}
+{-# LANGUAGE OverloadedStrings            #-}
 {-# LANGUAGE DeriveFoldable            #-}
 {-# LANGUAGE DeriveFunctor             #-}
 {-# LANGUAGE DeriveGeneric             #-}
@@ -62,7 +63,7 @@ match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
 
 type FreshT = FreshMT
-type BaseT m = ReaderT StepEnv (WriterT [String] m)
+type BaseT m = ReaderT StepEnv (WriterT [Doc] m)
 type BaseM = BaseT Maybe
 type StepM = FreshT BaseM
 
@@ -82,17 +83,17 @@ eval = go 0
     Nothing       -> putStrLn (renderString tm)
     Just (tm', l) -> do
       putStrLn ("\nStep #" ++ show n)
-      traverse_ putStrLn l
+      traverse_ putDoc l
       putStrLn (" ==> " ++ renderString tm')
       go (n + 1) tm'
 
-step :: Tm -> Maybe (Tm, [String])
+step :: Tm -> Maybe (Tm, [Doc])
 step tm = stepM tm & runFreshMT & flip runReaderT env & runWriterT
 
 stepM :: Tm -> StepM Tm
 stepM tm = asum (stepRules tm)
 
-logT :: String -> StepM ()
+logT :: Doc -> StepM ()
 logT s = tell [s]
 
 data StepRule
@@ -120,7 +121,7 @@ data StepRule
 logR :: Tm -> StepRule -> StepM ()
 logR tm s = do
   depth <- view recursionDepth
-  logT (concat (replicate depth "  ") ++ show s ++ ": " ++ renderString tm)
+  logT (indent (2 * depth) (ppr (show s) <+> ":" <+> align (ppr tm)))
 
 stepRules :: Tm -> [StepM Tm]
 stepRules tm = map

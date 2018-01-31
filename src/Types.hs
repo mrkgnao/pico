@@ -39,12 +39,6 @@ type Ty = Tm
 data HetEq = HetEq Ty Kd Kd Ty
   deriving (Show, Generic, Alpha, Subst Tm, Subst Co)
 
-data BdrData = CtxTm TmVar Rel Kd | CtxCo CoVar HetEq
-  deriving (Show, Generic, Alpha)
-
-data Bdr a = BdTm Rel Kd (Bind TmVar a) | BdCo HetEq (Bind CoVar a)
-  deriving (Show, Generic, Alpha)
-
 data PrimTy = TyInt | TyBool | TyChar
   deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
@@ -59,6 +53,18 @@ data TmArg = TmArgTm Tm | TmArgCo Co
 
 data CoArg = CoArgTm Tm | CoArgCo Co | CoArgCoPair Co Co
   deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
+
+data BdrData = CtxTm TmVar Rel Kd | CtxCo CoVar HetEq
+  deriving (Show, Generic, Alpha)
+
+data Del = BdrTm TmVar Rel Kd | BdrCo CoVar HetEq
+  deriving (Show, Generic, Alpha)
+
+
+data Bdr a = BdTm Rel Kd (Bind TmVar a) | BdCo HetEq (Bind CoVar a)
+  deriving (Show, Generic, Alpha)
+
+type Tele = [BdrData]
 
 data Tm
   = TmVar TmVar
@@ -160,8 +166,6 @@ _TmRelLam = _TmLamTm Rel
 
 _TmIrrelLam :: Prism' Tm (Kd, Bind TmVar Tm)
 _TmIrrelLam = _TmLamTm Irrel
-
-type Tele = [BdrData]
 
 data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
 

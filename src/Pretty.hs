@@ -18,7 +18,6 @@ import           Data.Text.Prettyprint.Doc                 (backslash, dot,
                                                             pipe, pretty)
 import qualified Data.Text.Prettyprint.Doc                 as P
 import           Data.Text.Prettyprint.Doc.Render.Terminal
-import           Data.Text.Prettyprint.Doc.Util            (putDocW)
 
 import qualified Data.Text.Lazy                            as TL
 import qualified Data.Text.Lazy.IO                         as TL
@@ -48,6 +47,18 @@ renderStdout = renderStdout' id
 
 renderStdout' :: Pretty a => DocEndo -> a -> IO ()
 renderStdout' f = TL.putStrLn . renderText' f
+
+putDocW :: Int -> Doc -> IO ()
+putDocW w =
+  TL.putStrLn
+    . TL.replace "\\e" "\ESC"
+    . renderLazy
+    . P.layoutPretty layoutOpts
+    . runPprM
+  where layoutOpts = P.LayoutOptions (P.AvailablePerLine w 1.0)
+
+putDoc :: Doc -> IO ()
+putDoc = putDocW 100
 
 renderText'' :: Pretty a => Bool -> DocEndo -> a -> TL.Text
 renderText'' c f =
@@ -245,6 +256,7 @@ tightAppPrec = 12
 arrPrec = 1
 casePrec = 1
 letPrec = 1
+conPrec = 1
 
 pprApp f x = parenise appPrec (assoc appPrec f <+> x)
 
@@ -262,10 +274,8 @@ pprBdr = \case
     )
   BdCo heq (U.B p t) -> parenise
     bdrPrec
-    (   "λ"
-    <+> parens (pprName' False p <+> ":" <+> ppr heq)
-    <+> "=>"
-    <+> nowrap (ppr t)
+    ( "λ" <+> parens (pprName' False p <+> ":" <+> ppr heq) <+> "=>" <+> nowrap
+      (ppr t)
     )
 
 varWrap :: Rel -> DocEndo
@@ -283,10 +293,10 @@ annPrimLit :: DocEndo
 annPrimLit = annotate (color Red)
 
 primLitSuffix :: Doc
-primLitSuffix = "#"
+primLitSuffix = ""
 
 primOpSuffix :: Doc
-primOpSuffix = "#"
+primOpSuffix = ""
 
 pprPrimBinop :: PrimBinop -> Doc
 pprPrimBinop = \case
@@ -317,21 +327,27 @@ pprTm = \case
   TmPrimBinop op l r -> pprBinopApp op l r
   TmVar v            -> ppr v
   TmLam bd           -> pprBdr bd
-  TmApp f arg -> pprApp (ppr f) (ppr arg)
-  TmCase tm kd alts -> vcat ["case" <+> ppr tm <+> "at" <+> ppr kd <+> "of", indent 2 (vcat (map ppr alts))]
-  TmConst k ts -> ppr k <+> braces (hsep (map ppr ts))
+  TmApp f arg        -> pprApp (ppr f) (ppr arg)
+  TmCase tm kd alts  -> vcat
+    [ "case"
+    <+> brackets (ppr kd) <+> ppr tm
+    <+> "of"
+    , indent 2 (vcat (map ppr alts))
+    ]
+  TmConst k  ts -> ppr k <+> braces (hsep (map ppr ts))
+  TmCast  tm co -> ppr tm <+> "|>" <+> ppr co
 
 pprTmAlt :: TmAlt -> Doc
 pprTmAlt (TmAlt p t) = ppr p <+> "=>" <+> ppr t
 
 pprPat :: Pat -> Doc
 pprPat = \case
-  PatWild -> "_"
+  PatWild  -> "_"
   PatCon k -> ppr k
 
 pprKonst :: Konst -> Doc
 pprKonst = \case
-  KType -> "Type"
+  KType    -> "Type"
   KDtCon c -> ppr c
   KTyCon t -> ppr t
 
@@ -353,5 +369,8 @@ annCo = annotate (color Yellow)
 
 pprCo :: Co -> Doc
 pprCo = annCo . \case
-  CoRefl t -> angles (ppr t)
-  x -> ppr (show x)
+  CoRefl t     -> angles (ppr t)
+  CoTrans x y  -> ppr x <+> ";" <+> ppr y
+  CoLeft  e co -> "left" <+> braces (ppr e) <+> ppr co
+  CoRight e co -> "right" <+> braces (ppr e) <+> ppr co
+  x            -> ppr (show x)
