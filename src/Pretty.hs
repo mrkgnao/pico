@@ -29,16 +29,16 @@ import           Prelude hiding ((^^))
 
 import Types
 
-type Doc = P.Doc AnsiStyle
+type PureDoc = P.Doc AnsiStyle
 
-type DocM = PprM Doc
+type Doc = PprM PureDoc
 
 type PprE a = PprM a -> PprM a
 type PprF a = forall f. Foldable f => f (PprM a) -> PprM a
 
-type DocEndo = PprE Doc
+type DocEndo = PprE PureDoc
 
-type DocFold = PprF Doc
+type DocFold = PprF PureDoc
 
 renderStdout :: Pretty a => a -> IO ()
 renderStdout = renderStdout' id
@@ -69,23 +69,23 @@ renderString = TL.unpack . renderText
 renderPlainString :: Pretty a => a -> String
 renderPlainString = TL.unpack . renderText'' False id
 
-liftDocM :: (Foldable t) => ([a] -> b) -> t (PprM a) -> PprM b
-liftDocM f = fmap f . sequence . toList
+liftDoc :: (Foldable t) => ([a] -> b) -> t (PprM a) -> PprM b
+liftDoc f = fmap f . sequence . toList
 
 listed :: DocFold
-listed = liftDocM P.list
+listed = liftDoc P.list
 
 sep, vsep, hsep, fsep :: DocFold
-sep = liftDocM P.sep
-vsep = liftDocM P.vsep
-hsep = liftDocM P.hsep
-fsep = liftDocM P.fillSep
+sep = liftDoc P.sep
+vsep = liftDoc P.vsep
+hsep = liftDoc P.hsep
+fsep = liftDoc P.fillSep
 
 cat, vcat, hcat, fcat :: DocFold
-cat = liftDocM P.cat
-vcat = liftDocM P.vcat
-hcat = liftDocM P.hcat
-fcat = liftDocM P.fillCat
+cat = liftDoc P.cat
+vcat = liftDoc P.vcat
+hcat = liftDoc P.hcat
+fcat = liftDoc P.fillCat
 
 group :: DocEndo
 group = fmap P.group
@@ -117,18 +117,18 @@ nest = fmap . P.nest
 hang :: Int -> DocEndo
 hang = fmap . P.hang
 
-column :: (Int -> PprM Doc) -> PprM Doc
+column :: (Int -> Doc) -> Doc
 column f = PprM (\env -> P.column (pprWithEnv env . f))
 
-nesting :: (Int -> PprM Doc) -> PprM Doc
+nesting :: (Int -> Doc) -> Doc
 nesting f = PprM (\env -> P.nesting (pprWithEnv env . f))
 
-punctuate :: Doc -> [Doc] -> [DocM]
+punctuate :: PureDoc -> [PureDoc] -> [Doc]
 punctuate o = fmap pure . P.punctuate o
 
 infixr 5 <+>
 
-(<+>) :: DocM -> DocM -> DocM
+(<+>) :: Doc -> Doc -> Doc
 (<+>) = liftA2 (P.<+>)
 
 instance Semigroup a => Semigroup (PprM a) where
@@ -158,21 +158,24 @@ runPprM f = unPprM f iEnv where iEnv = PprEnv (-1)
 assoc :: Int -> PprE a
 assoc p = local (precedence .~ p)
 
-pprPure :: Pretty a => a -> Doc
+pprPure :: Pretty a => a -> PureDoc
 pprPure = runPprM . ppr
 
-wrapOn :: Bool -> PprE a -> PprE a
-wrapOn c f = if c then f else id
-{-# INLINE wrapOn #-}
+applyIf :: Bool -> PprE a -> PprE a
+applyIf c f = if c then f else id
+{-# INLINE applyIf #-}
 
 above :: Int -> PprE a -> PprE a
 above p f m = do
   outerPrec <- view precedence
-  wrapOn (outerPrec > p) f (assoc (p + 1) m)
+  applyIf (outerPrec > p) f (assoc (p + 1) m)
+{-# INLINE above #-}
 
 nowrap :: PprE a
 nowrap = assoc (-1)
+{-# INLINE nowrap #-}
 
+parenise :: Int -> Doc -> Doc
 parenise prec body = above prec parens body
 
 infixr 8 %%
@@ -182,9 +185,9 @@ infixr 8 ^^
 (^^) = parenise
 
 class Pretty a where
-  ppr :: a -> DocM
+  ppr :: a -> Doc
 
-instance IsString DocM where fromString = pure . fromString
+instance IsString Doc where fromString = pure . fromString
 
 instance Pretty Bool where ppr = fromString . show
 instance Pretty Char where ppr = fromString . show
@@ -199,20 +202,50 @@ instance Pretty TL.Text where ppr = fromString . TL.unpack
 instance Pretty PrimTy where ppr = pprPrimTy
 instance Pretty PrimExp where ppr = pprPrimExp
 instance Pretty PrimBinop where ppr = pprPrimBinop
+instance Pretty Tm where ppr = pprTm
+instance Pretty Co where ppr = pprCo
 
-pprPrimBinop :: PrimBinop -> DocM
+primLitSuffix :: Doc
+primLitSuffix = "#"
+
+primOpSuffix :: Doc
+primOpSuffix = "#"
+
+pprPrimBinop :: PrimBinop -> Doc
 pprPrimBinop = \case
-  OpIntAdd -> "+#"
-  OpIntMul -> "*#"
+  OpIntAdd -> "+" <> primOpSuffix
+  OpIntMul -> "*" <> primOpSuffix
 
-pprPrimTy :: PrimTy -> DocM
+pprPrimTy :: PrimTy -> Doc
 pprPrimTy = \case
-  TyInt -> "Int#"
-  TyBool -> "Bool#"
-  TyChar -> "Char#"
+  TyInt  -> "Int" <> primOpSuffix
+  TyBool -> "Bool" <> primOpSuffix
+  TyChar -> "Char" <> primOpSuffix
 
-pprPrimExp :: PrimExp -> DocM
+pprPrimExp :: PrimExp -> Doc
 pprPrimExp = \case
-  ExpInt i -> pprPrimTy TyInt <+> ppr i <> "#"
-  ExpBool b -> pprPrimTy TyBool <+> ppr b <> "#"
-  ExpChar c -> pprPrimTy TyChar <+> ppr c <> "#"
+  ExpInt  i -> ppr i <> primLitSuffix
+  ExpBool b -> ppr b <> primLitSuffix
+  ExpChar c -> ppr c <> primLitSuffix
+
+pprTm :: Tm -> Doc
+pprTm = \case
+  TmPrimTy  p        -> ppr p
+  TmPrimExp p        -> ppr p
+  TmPrimBinop op l r -> pprBinopApp op l r
+
+genInfixBin outPrec leftPrec rightPrec mid l r = parenise
+  outPrec
+  (assoc leftPrec (ppr l) <+> ppr mid <+> assoc rightPrec (ppr r))
+
+leftInfixBin prec = genInfixBin prec prec (prec + 1)
+rightInfixBin prec = genInfixBin prec (prec + 1) prec
+infixBin prec = genInfixBin prec (prec + 1) (prec + 1)
+
+pprBinopApp :: PrimBinop -> Tm -> Tm -> Doc
+pprBinopApp op = case op of
+  OpIntAdd -> leftInfixBin 6 op
+  OpIntMul -> leftInfixBin 7 op
+
+pprCo :: Co -> Doc
+pprCo = undefined

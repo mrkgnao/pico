@@ -412,10 +412,11 @@ stepRules tm = map
   s_Match = do
     logR tm S_Match
     (scrutinee, _k, tmAlts) <- match _TmCase tm
-    (h', phis)            <- match _TmApps scrutinee
-    (h , taus)            <- match _TmConst h'
+    (h', phis)              <- match _TmApps scrutinee
+    (h , taus)              <- match _TmConst h'
 
-    let matchingTmAlts = filter (\tmAlt -> tmAlt ^. tmAltPat == PatCon h) tmAlts
+    let matchingTmAlts =
+          filter (\tmAlt -> tmAlt ^. tmAltPat == PatCon h) tmAlts
     firstMatch <- match _head matchingTmAlts
     let t0 = firstMatch ^. tmAltBody
 
@@ -552,20 +553,15 @@ i3 = tmExpInt 3
 i4 :: Tm
 i4 = tmExpInt 4
 
--- arith :: Tm
--- arith = TmAppTm
---   idTm
---   (     (tmExpInt 6 `add` tmExpInt 2 `mul` (tmExpInt 10 `add` tmExpInt 4))
---   `add` (     tmExpInt 9
---         `mul` (tmExpInt 1 `add` tmExpInt 7 `add` tmExpInt 5)
---         )
---   )
+arith :: Tm
+arith =
+  (tmExpInt 6 `add` tmExpInt 2 `mul` (tmExpInt 10 `add` tmExpInt 4))
+    `add` (tmExpInt 9 `mul` (tmExpInt 1 `add` tmExpInt 7 `add` tmExpInt 5))
 
---   where
---     infixl 6 `add`
---     add = TmPrimBinop OpIntAdd
---     infixl 7 `mul`
---     mul = TmPrimBinop OpIntMul
+infixl 6 `add`
+add = TmPrimBinop OpIntAdd
+infixl 7 `mul`
+mul = TmPrimBinop OpIntMul
 
 -- factTm :: Tm
 -- factTm = TmFix (TmLam
