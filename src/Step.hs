@@ -28,37 +28,6 @@ import           Control.Monad.Trans
 import Types
 import Pretty
 
-pptm :: Tm -> String
--- pptm tm = "\n" ++ pptm' 0 tm ++ "\n" ++ pptmO tm
-pptm = pptm' 0
-
-pptmAlt :: Int -> TmAlt -> String
-pptmAlt d (TmAlt (PatCon p) b) = show p ++ " -> " ++ show b
- where
-  parensIf b x = if d > b then "(" ++ x ++ ")" else x
-  parens x = "(" ++ x ++ ")"
-
-pptm' :: Int -> Tm -> String
-pptm' d = \case
-  TmPrimExp (ExpInt x)     -> show x
-  TmPrimBinop OpIntAdd x y -> parensIf 6 (pptm' 7 x ++ " + " ++ pptm' 7 y)
-  TmPrimBinop OpIntMul x y -> parensIf 7 (pptm' 8 x ++ " * " ++ pptm' 8 y)
-  TmApp x (TmArgTm y) ->
-    parensIf 11 (parens (pptm x) ++ " " ++ parens (pptm y))
-  TmApp x (TmArgCo y) ->
-    parensIf 11 (parens (pptm x) ++ " " ++ parens (show y))
-  TmPrimTy TyInt  -> "Int"
-  TmPrimTy TyBool -> "Bool"
-  TmConst (KDtCon x) ts ->
-    parensIf 11 (x ++ " {" ++ unwords (map pptm ts) ++ "}")
-  TmCase t k tmAlts ->
-    "case " ++ pptm t ++ " at " ++ pptm k ++ " of \n" ++ unlines
-      (map (pptmAlt 0) tmAlts)
-  x -> parensIf 11 (show x)
- where
-  parensIf b x = if d > b then "(" ++ x ++ ")" else x
-  parens x = "(" ++ x ++ ")"
-
 match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
 
