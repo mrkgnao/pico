@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f735791392d54a33165ef7fe0e84f5f059b8ff5fb9d04551aa1d8f483d4d14ab
+-- hash: d9f5fd5bc91f72027eb010970650a0936226baec753b2411f2f6d3e44be37ee1
 
 name:           edible
 version:        0.1.0.0
@@ -42,11 +42,11 @@ executable edible
     , comonad
     , containers
     , deriving-compat
+    , ether
     , free
     , hedgehog
     , lens
     , mtl
-    , multistate
     , prettyprinter
     , prettyprinter-ansi-terminal
     , text

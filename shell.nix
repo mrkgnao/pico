@@ -60,7 +60,7 @@ in
       # llvm-hs-typed
 
       unbound-generics
-      multistate
+      ether
     ];
 
     # Optionally, also add sets of related packages that are

@@ -22,7 +22,7 @@ dependencies:
   - prettyprinter
   - prettyprinter-ansi-terminal
   - unbound-generics
-  - multistate
+  - ether
   - lens
   - containers
   - vector

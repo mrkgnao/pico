@@ -1,10 +1,11 @@
 {-# LANGUAGE DeriveAnyClass            #-}
-{-# LANGUAGE TupleSections            #-}
-{-# LANGUAGE ViewPatterns            #-}
-{-# LANGUAGE UndecidableInstances            #-}
-{-# LANGUAGE DataKinds            #-}
-{-# LANGUAGE ConstraintKinds            #-}
-{-# LANGUAGE OverloadedStrings            #-}
+{-# LANGUAGE TypeApplications          #-}
+{-# LANGUAGE TupleSections             #-}
+{-# LANGUAGE ViewPatterns              #-}
+{-# LANGUAGE UndecidableInstances      #-}
+{-# LANGUAGE DataKinds                 #-}
+{-# LANGUAGE ConstraintKinds           #-}
+{-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE DeriveFoldable            #-}
 {-# LANGUAGE DeriveFunctor             #-}
 {-# LANGUAGE DeriveGeneric             #-}
@@ -33,6 +34,7 @@ import           Control.Monad.Trans
 import Types
 import Pretty
 
+
 match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
 
@@ -45,8 +47,27 @@ match p x = maybe mzero pure (x ^? p)
 --   tele :: Lens' env Tele
 --
 
-hasKind :: MonadPlus m => Ty -> Kd -> ReaderT (Sig, Tele) m ()
-hasKind = undefined
+data TcEnv = TcEnv { _tcContext :: Tele, _tcSignature :: Sig }
+
+type TcT = ReaderT TcEnv
+
+coerProvesProp :: MonadPlus m => Co -> HetEq -> TcT m ()
+coerProvesProp = undefined
+
+classifiesVec :: MonadPlus m => [TmArg] -> Tele -> TcT m ()
+classifiesVec = undefined
+
+classifiesVecRev :: MonadPlus m => [TmArg] -> Tele -> TcT m ()
+classifiesVecRev = undefined
+
+altResultKind :: MonadPlus m => TmAlt -> Kd -> TcT m ()
+altResultKind = undefined
+
+tyConDecomp :: MonadPlus m => Konst -> Tele -> Tele -> Konst -> m ()
+tyConDecomp = undefined
+
+typeOfKind :: MonadPlus m => Ty -> Kd -> ReaderT (Sig, Tele) m ()
+typeOfKind = undefined
 
 propOk
   :: MonadPlus m
@@ -60,12 +81,12 @@ ctxOk :: (MonadPlus m, MonadError String m) => Tele -> ReaderT Sig m ()
 ctxOk = \case
   TeleNil ->
     -- Ctx_Nil
-    sigOk
+    ask >>= sigOk
   TeleBind (unrebind -> (bdr, tele)) -> asum
     [ do
       -- Ctx_TyVar
       (tv, r, k) <- match _BdrTm bdr
-      withReaderT (, relevTele tele) (hasKind k (TmConst KType []))
+      withReaderT (, relevTele tele) (typeOfKind k (TmConst KType []))
       ctxOk tele
     , do
       -- Ctx_CoVar
@@ -75,21 +96,20 @@ ctxOk = \case
     , throwError "No match"
     ]
 
-sigOk :: (MonadPlus m, MonadError String m) => ReaderT Sig m ()
-sigOk = do
-  s@(Sig sig) <- ask 
+sigOk :: (MonadPlus m, MonadError String m) => Sig -> m ()
+sigOk s@(Sig sig) =
   case sig of
     [] ->
       -- Sig_Nil
       pure ()
     (x:xs) -> case x of
-                SigTyCon tc tks -> ctxOk (teleOfAdtSig tks)
+                SigTyCon tc tks -> s & runReaderT (ctxOk (teleOfAdtSig tks))
                 SigDtCon k d t  -> do
                   let matchingTyCon = \case
                         SigTyCon t' _ -> t == t'
                         _             -> False
                   SigTyCon _ tks <- liftMaybe (firstWith matchingTyCon sig)
-                  ctxOk (teleConcat (teleOfAdtSig tks) d)
+                  s & runReaderT (ctxOk (teleConcat (teleOfAdtSig tks) d))
 
 firstWith cond [] = Nothing
 firstWith cond (x:xs) | cond x    = Just x
