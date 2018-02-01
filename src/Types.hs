@@ -60,6 +60,15 @@ data Bdr = BdrTm TmVar (Embed Rel) (Embed Kd) | BdrCo CoVar (Embed HetEq)
 data Tele = TeleNil | TeleBind (Rebind Bdr Tele)
   deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
 
+type TyCon = String
+type DtCon = String
+
+data SigElt = SigTyCon TyCon [(TmVar, Kd)] | SigDtCon DtCon Tele TyCon
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
+
+newtype Sig = Sig [SigElt]
+  deriving (Show, Generic, Alpha, Subst Co, Subst Tm)
+
 teleSnoc :: Bdr -> Tele -> Tele
 teleSnoc x = \case
   TeleNil -> TeleBind (rebind x TeleNil)

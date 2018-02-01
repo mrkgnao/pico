@@ -60,6 +60,7 @@ in
       # llvm-hs-typed
 
       unbound-generics
+      multistate
     ];
 
     # Optionally, also add sets of related packages that are

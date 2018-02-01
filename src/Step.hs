@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveAnyClass            #-}
+{-# LANGUAGE ConstraintKinds            #-}
 {-# LANGUAGE OverloadedStrings            #-}
 {-# LANGUAGE DeriveFoldable            #-}
 {-# LANGUAGE DeriveFunctor             #-}
@@ -28,8 +29,39 @@ import           Control.Monad.Trans
 import Types
 import Pretty
 
+
 match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
+
+type SigE env m = (MonadReader env m, HasSig env)
+class HasSig env where
+  sig :: Lens' env Sig
+
+type TeleE env m = (MonadReader env m, HasTele env)
+class HasTele env where
+  tele :: Lens' env Tele
+
+hasKind :: (MonadPlus m, SigE env m, TeleE env m) => Ty -> Kd -> m ()
+hasKind = undefined
+
+ctxOk :: (MonadPlus m, MonadError String m, SigE env m) => Tele -> m ()
+ctxOk = \case
+  TeleNil -> view sig >>= sigOk
+  TeleBind bd ->
+    let (bdr, rest) = unrebind bd
+    in  asum
+          [ do
+            (tv, r, k) <- match _BdrTm bdr
+            ctxOk rest
+            
+          , throwError "No match"
+          ]
+
+
+
+sigOk :: (Monad m) => Sig -> m ()
+sigOk (Sig ss) = case ss of
+                   [] -> pure ()
 
 type FreshT = FreshMT
 type BaseT m = ReaderT StepEnv (WriterT [LogItem Doc] m)
@@ -44,25 +76,6 @@ env = StepEnv {_stepContext = TeleNil, _stepRecursionDepth = 0}
 
 instance HasRecursionDepth StepEnv where
   recursionDepth = stepRecursionDepth
-
-eval :: Tm -> IO ()
-eval = go 1
- where
-  go :: Int -> Tm -> IO ()
-  go n tm = case step tm of
-    Nothing       -> renderStdout tm
-    Just (tm', l) -> do
-      putDoc (" #" <> ppr n <+> align (vcat (map applyIndents l)) <> "\n")
-      go (n + 1) tm'
-
-applyIndents :: LogItem Doc -> Doc
-applyIndents (LogItem n (Msg d)) = indent (2 * n) d
-
-step :: Tm -> Maybe (Tm, [LogItem Doc])
-step tm = stepM tm & runFreshMT & flip runReaderT env & runWriterT
-
-stepM :: Tm -> StepM Tm
-stepM tm = asum (stepRules tm)
 
 data StepRule
   = S_BetaRel
@@ -86,10 +99,27 @@ data StepRule
   | S_FPush
   deriving Show
 
-logR :: Tm -> StepRule -> StepM ()
-logR tm s = do
-  depth <- view recursionDepth
-  logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
+eval :: Tm -> IO ()
+eval = go 1
+ where
+  go :: Int -> Tm -> IO ()
+  go n tm = case step tm of
+    Nothing       -> renderStdout tm
+    Just (tm', l) -> do
+      putDoc (" #" <> ppr n <+> align (vcat (map applyIndents l)) <> "\n")
+      go (n + 1) tm'
+
+applyIndents :: LogItem Doc -> Doc
+applyIndents (LogItem n (Msg d)) = indent (2 * n) d
+
+step :: Tm -> Maybe (Tm, [LogItem Doc])
+step tm = stepM tm & runFreshMT & flip runReaderT env & runWriterT
+
+stepM :: Tm -> StepM Tm
+stepM tm = asum (stepRules tm)
+
+logRule :: Tm -> StepRule -> StepM ()
+logRule tm s = logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
 
 stepRules :: Tm -> [StepM Tm]
 stepRules tm = map
@@ -118,7 +148,7 @@ stepRules tm = map
   stepIntBinop
     :: StepRule -> (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
   stepIntBinop s f p = do
-    logR tm s
+    logRule tm s
     (op, l', r') <- match _TmPrimBinop tm
     match p op
     l <- match (_TmPrimExp . _ExpInt) l'
@@ -129,26 +159,26 @@ stepRules tm = map
   s_Prim_EvalIntMul = stepIntBinop S_Prim_EvalIntMul (*) _OpIntMul
 
   s_BetaRel         = do
-    logR tm S_BetaRel
+    logRule tm S_BetaRel
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmRelLam f
     substInto s1 s2
 
   -- TODO check value
   s_BetaIrrel = do
-    logR tm S_BetaIrrel
+    logRule tm S_BetaIrrel
     (f, s2) <- match _TmAppTm tm
     (_, s1) <- match _TmIrrelLam f
     substInto s1 s2
 
   s_CBeta = do
-    logR tm S_CBeta
+    logRule tm S_CBeta
     (f, g) <- match _TmAppCo tm
     (_, s) <- match _TmLamCo f
     substInto s g
 
   s_Unroll = do
-    logR tm S_Unroll
+    logRule tm S_Unroll
     t         <- match _TmFix tm
     (s, body) <- match _TmRelLam t
     (v, b   ) <- unbind body
@@ -158,8 +188,8 @@ stepRules tm = map
 
   congStep :: StepRule -> Lens' a Tm -> Prism' Tm a -> StepM Tm
   congStep ruleName l pr = review pr <$> do
-    logR  tm ruleName
-    match pr tm >>= l stepM
+    logRule tm ruleName
+    match   pr tm >>= l stepM
 
   cong1 :: Field1 a a Tm Tm => StepRule -> Prism' Tm a -> StepM Tm
   cong1 s = congStep s _1
@@ -175,15 +205,15 @@ stepRules tm = map
 
   -- TODO check value
   s_IrrelAbs_Cong = do
-    logR tm S_IrrelAbs_Cong
+    logRule tm S_IrrelAbs_Cong
     (k, body) <- match _TmIrrelLam tm
     (v, expr) <- unbind body
-    s'        <- local (stepContext %~ teleSnoc (_BdrTm # (v, Irrel, k))) (stepM expr)
+    s' <- local (stepContext %~ teleSnoc (_BdrTm # (v, Irrel, k))) (stepM expr)
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
-    logR  tm           S_Binop_Double_Cong
-    match _TmPrimBinop tm >>= _2 stepM >>= _3 stepM
+    logRule tm           S_Binop_Double_Cong
+    match   _TmPrimBinop tm >>= _2 stepM >>= _3 stepM
 
   s_Binop_Left_Cong  = congStep S_Binop_Left_Cong _2 _TmPrimBinop
   s_Binop_Right_Cong = congStep S_Binop_Right_Cong _3 _TmPrimBinop
@@ -191,13 +221,13 @@ stepRules tm = map
   -- Push rules
 
   s_Trans            = do
-    logR tm S_Trans
+    logRule tm S_Trans
     (x, g2) <- match _TmCast tm
     (v, g1) <- match _TmCast x
     pure (_TmCast # (v, _CoTrans # (g1, g2)))
 
   s_Match = do
-    logR tm S_Match
+    logRule tm S_Match
     (scrutinee, _k, tmAlts) <- match _TmCase tm
     (h', phis)              <- match _TmApps scrutinee
     (h , taus)              <- match _TmConst h'
@@ -210,7 +240,7 @@ stepRules tm = map
     pure (_TmApps # (t0, (_TmArgCo # _CoRefl # h') <| phis))
 
   s_APush = do
-    logR tm S_APush
+    logRule tm S_APush
     (k, bd  ) <- match _TmIrrelLam tm
     (a, body) <- unbind bd
     (v, g   ) <- match _TmCast body
@@ -220,7 +250,7 @@ stepRules tm = map
     undefined
 
   s_FPush = do
-    logR tm S_FPush
+    logRule tm S_FPush
     castedLam    <- match _TmFix tm
     (lam, g0   ) <- match _TmCast castedLam
     (kd , bdr  ) <- match _TmRelLam lam
@@ -292,7 +322,9 @@ c = s2n "c"
 
 caseTm :: Tm
 caseTm = TmCase
-  (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 6 `add` tmExpInt 2))) 
+  ( TmApp (TmConst just [TmPrimTy TyInt])
+          (TmArgTm (tmExpInt 6 `add` tmExpInt 2))
+  )
   -- (TmConst nothing [TmPrimTy TyInt]) 
   (TmPrimTy TyInt)
   [ TmAlt
@@ -343,8 +375,8 @@ add = TmPrimBinop OpIntAdd
 infixl 7 `mul`
 mul = TmPrimBinop OpIntMul
 
-tele :: Tele
-tele = TeleBind $ rebind (BdrTm x (Embed Rel) (Embed (TmVar x))) $ TeleNil
+-- tele :: Tele
+-- tele = TeleBind $ rebind (BdrTm x (Embed Rel) (Embed (TmVar x))) $ TeleNil
 
-bdr :: Bdr
-bdr = BdrTm y (Embed Irrel) (Embed (TmVar x))
+-- bdr :: Bdr
+-- bdr = BdrTm y (Embed Irrel) (Embed (TmVar x))
