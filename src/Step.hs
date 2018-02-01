@@ -1,4 +1,8 @@
 {-# LANGUAGE DeriveAnyClass            #-}
+{-# LANGUAGE TupleSections            #-}
+{-# LANGUAGE ViewPatterns            #-}
+{-# LANGUAGE UndecidableInstances            #-}
+{-# LANGUAGE DataKinds            #-}
 {-# LANGUAGE ConstraintKinds            #-}
 {-# LANGUAGE OverloadedStrings            #-}
 {-# LANGUAGE DeriveFoldable            #-}
@@ -29,39 +33,80 @@ import           Control.Monad.Trans
 import Types
 import Pretty
 
-
 match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
 
-type SigE env m = (MonadReader env m, HasSig env)
-class HasSig env where
-  sig :: Lens' env Sig
+-- type SigE env m = (MonadReader env m, HasSig env)
+-- class HasSig env where
+--   sig :: Lens' env Sig
 
-type TeleE env m = (MonadReader env m, HasTele env)
-class HasTele env where
-  tele :: Lens' env Tele
+-- type TeleE env m = (MonadReader env m, HasTele env)
+-- class HasTele env where
+--   tele :: Lens' env Tele
+--
 
-hasKind :: (MonadPlus m, SigE env m, TeleE env m) => Ty -> Kd -> m ()
+hasKind :: MonadPlus m => Ty -> Kd -> ReaderT (Sig, Tele) m ()
 hasKind = undefined
 
-ctxOk :: (MonadPlus m, MonadError String m, SigE env m) => Tele -> m ()
+propOk
+  :: MonadPlus m
+  => HetEq
+  -> ReaderT (Sig, Tele) m ()
+propOk = undefined
+
+-- | Context well-formedness check.
+-- TODO disjointness checks?
+ctxOk :: (MonadPlus m, MonadError String m) => Tele -> ReaderT Sig m ()
 ctxOk = \case
-  TeleNil -> view sig >>= sigOk
-  TeleBind bd ->
-    let (bdr, rest) = unrebind bd
-    in  asum
-          [ do
-            (tv, r, k) <- match _BdrTm bdr
-            ctxOk rest
-            
-          , throwError "No match"
-          ]
+  TeleNil ->
+    -- Ctx_Nil
+    sigOk
+  TeleBind (unrebind -> (bdr, tele)) -> asum
+    [ do
+      -- Ctx_TyVar
+      (tv, r, k) <- match _BdrTm bdr
+      withReaderT (, relevTele tele) (hasKind k (TmConst KType []))
+      ctxOk tele
+    , do
+      -- Ctx_CoVar
+      (cv, h) <- match _BdrCo bdr
+      withReaderT (, relevTele tele) (propOk h)
+      ctxOk tele
+    , throwError "No match"
+    ]
 
+sigOk :: (MonadPlus m, MonadError String m) => ReaderT Sig m ()
+sigOk = do
+  s@(Sig sig) <- ask 
+  case sig of
+    [] ->
+      -- Sig_Nil
+      pure ()
+    (x:xs) -> case x of
+                SigTyCon tc tks -> ctxOk (teleOfAdtSig tks)
+                SigDtCon k d t  -> do
+                  let matchingTyCon = \case
+                        SigTyCon t' _ -> t == t'
+                        _             -> False
+                  SigTyCon _ tks <- liftMaybe (firstWith matchingTyCon sig)
+                  ctxOk (teleConcat (teleOfAdtSig tks) d)
 
+firstWith cond [] = Nothing
+firstWith cond (x:xs) | cond x    = Just x
+                      | otherwise = firstWith cond xs
 
-sigOk :: (Monad m) => Sig -> m ()
-sigOk (Sig ss) = case ss of
-                   [] -> pure ()
+teleOfAdtSig :: [(TmVar, Kd)] -> Tele
+teleOfAdtSig = \case
+  []           -> TeleNil
+  ((t, k):tks) -> TeleBind (rebind (_BdrTm # (t, Irrel, k)) (teleOfAdtSig tks))
+
+teleConcat :: Tele -> Tele -> Tele
+teleConcat TeleNil t = t
+teleConcat (TeleBind (unrebind -> (bdr, t))) t' =
+  TeleBind (rebind bdr (teleConcat t t'))
+
+liftMaybe :: MonadPlus m => Maybe a -> m a
+liftMaybe = maybe mzero pure
 
 type FreshT = FreshMT
 type BaseT m = ReaderT StepEnv (WriterT [LogItem Doc] m)

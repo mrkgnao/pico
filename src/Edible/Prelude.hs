@@ -33,7 +33,7 @@ import           Control.Monad.Except        as X (Except, ExceptT,
                                                    runExceptT)
 import           Control.Monad.Reader        as X (MonadReader (..), Reader,
                                                    ReaderT, runReader,
-                                                   runReaderT)
+                                                   runReaderT, mapReaderT, withReaderT)
 import           Control.Monad.RWS.Strict    as X (MonadRWS (..), RWS, RWST,
                                                    runRWS, runRWST)
 import           Control.Monad.State         as X (MonadState (..), State,

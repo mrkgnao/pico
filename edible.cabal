@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 77efec2208c83650bacc1816362c9fed946436500c2a3af48449a301bd6de477
+-- hash: f735791392d54a33165ef7fe0e84f5f059b8ff5fb9d04551aa1d8f483d4d14ab
 
 name:           edible
 version:        0.1.0.0
@@ -46,6 +46,7 @@ executable edible
     , hedgehog
     , lens
     , mtl
+    , multistate
     , prettyprinter
     , prettyprinter-ansi-terminal
     , text

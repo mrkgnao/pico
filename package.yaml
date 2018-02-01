@@ -21,7 +21,8 @@ dependencies:
   - base
   - prettyprinter
   - prettyprinter-ansi-terminal
-  - deriving-compat
+  - unbound-generics
+  - multistate
   - lens
   - containers
   - vector
@@ -33,8 +34,8 @@ dependencies:
   - free
   - comonad
   - adjunctions
+  - deriving-compat
   - bound
-  - unbound-generics
 
 default-extensions:
   - LambdaCase
