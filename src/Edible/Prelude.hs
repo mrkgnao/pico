@@ -10,7 +10,7 @@ module Edible.Prelude
   , recur
   , tshow
   , LogItem(..)
-  , Message
+  , Message(..)
   , logText
   ) where
 
@@ -65,17 +65,17 @@ recur = local (recursionDepth +~ 1)
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
 
-data LogItem = LogItem { _messageDepth :: !Int, _messageContents :: Message }
+data LogItem a = LogItem { _messageDepth :: !Int, _messageContents :: Message a }
 
-instance Show LogItem where
-  show (LogItem d (MsgText m)) = show d ++ ": " ++ Text.unpack m
+instance Show a => Show (LogItem a) where
+  show (LogItem d (Msg m)) = show d ++ ": " ++ show m
   -- show (LogItem d m) = show d ++ ": " ++ show m
 
-newtype Message = MsgText Text
+newtype Message a = Msg a
   deriving Show
 
-logText :: (MonadWriter [LogItem] m, RecursionDepthM env m) => Text -> m ()
+logText :: (MonadWriter [LogItem a] m, RecursionDepthM env m) => a -> m ()
 logText t = do
   depth <- view recursionDepth
-  tell [LogItem depth (MsgText t)]
+  tell [LogItem depth (Msg t)]
 

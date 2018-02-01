@@ -32,7 +32,7 @@ match :: MonadPlus m => Fold a b -> a -> m b
 match p x = maybe mzero pure (x ^? p)
 
 type FreshT = FreshMT
-type BaseT m = ReaderT StepEnv (WriterT [Doc] m)
+type BaseT m = ReaderT StepEnv (WriterT [LogItem Doc] m)
 type BaseM = BaseT Maybe
 type StepM = FreshT BaseM
 
@@ -46,27 +46,23 @@ instance HasRecursionDepth StepEnv where
   recursionDepth = stepRecursionDepth
 
 eval :: Tm -> IO ()
-eval = go 0
+eval = go 1
  where
-  go 0 tm = do
-    renderStdout tm
-    go 1 tm
+  go :: Int -> Tm -> IO ()
   go n tm = case step tm of
-    Nothing       -> putStrLn (renderString tm)
+    Nothing       -> renderStdout tm
     Just (tm', l) -> do
-      putStrLn ("\nStep #" ++ show n)
-      traverse_ putDoc l
-      putStrLn (" ==> " ++ renderString tm')
+      putDoc (" #" <> ppr n <+> align (vcat (map applyIndents l)) <> "\n")
       go (n + 1) tm'
 
-step :: Tm -> Maybe (Tm, [Doc])
+applyIndents :: LogItem Doc -> Doc
+applyIndents (LogItem n (Msg d)) = indent (2 * n) d
+
+step :: Tm -> Maybe (Tm, [LogItem Doc])
 step tm = stepM tm & runFreshMT & flip runReaderT env & runWriterT
 
 stepM :: Tm -> StepM Tm
 stepM tm = asum (stepRules tm)
-
-logT :: Doc -> StepM ()
-logT s = tell [s]
 
 data StepRule
   = S_BetaRel
@@ -93,7 +89,7 @@ data StepRule
 logR :: Tm -> StepRule -> StepM ()
 logR tm s = do
   depth <- view recursionDepth
-  logT (indent (2 * depth) (ppr (show s) <+> ":" <+> align (ppr tm)))
+  logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
 
 stepRules :: Tm -> [StepM Tm]
 stepRules tm = map
@@ -296,7 +292,7 @@ c = s2n "c"
 
 caseTm :: Tm
 caseTm = TmCase
-  (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 19)))
+  (TmApp (TmConst just [TmPrimTy TyInt]) (TmArgTm (tmExpInt 6 `add` tmExpInt 2))) 
   -- (TmConst nothing [TmPrimTy TyInt]) 
   (TmPrimTy TyInt)
   [ TmAlt
@@ -307,7 +303,7 @@ caseTm = TmCase
       ( tlam Rel
              x
              (TmPrimTy TyInt)
-             (TmPrimBinop OpIntAdd (tmExpInt 2) (TmVar x))
+             (tmExpInt 2 `add` TmVar x `mul` (TmVar x `add` tmExpInt (-4)))
       )
     )
   , TmAlt (PatCon nothing) (tcolam c nothingEq (tmExpInt (-1)))
