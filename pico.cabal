@@ -1,13 +1,7 @@
--- This file has been generated from package.yaml by hpack version 0.21.2.
---
--- see: https://github.com/sol/hpack
---
--- hash: d9f5fd5bc91f72027eb010970650a0936226baec753b2411f2f6d3e44be37ee1
-
-name:           edible
+name:           pico
 version:        0.1.0.0
-homepage:       https://github.com/mrkgnao/edible#readme
-bug-reports:    https://github.com/mrkgnao/edible/issues
+homepage:       https://github.com/mrkgnao/pico#readme
+bug-reports:    https://github.com/mrkgnao/pico/issues
 author:         Soham Chowdhury
 maintainer:     chow.soham@gmail.com
 license:        GPL-3
@@ -20,17 +14,17 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/mrkgnao/edible
+  location: https://github.com/mrkgnao/pico
 
-executable edible
+executable pico
   main-is: Main.hs
   other-modules:
-      Edible.Prelude
+      CustomPrelude
       PatArr
       Pretty
       Step
       Types
-      Paths_edible
+      Paths_pico
   hs-source-dirs:
       src
   default-extensions: LambdaCase

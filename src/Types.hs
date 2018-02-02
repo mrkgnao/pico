@@ -75,10 +75,10 @@ teleSnoc x = \case
   TeleBind b -> TeleBind (rebind bdr (teleSnoc x tele))
     where (bdr, tele) = unrebind b
 
-relevTele :: Tele -> Tele
-relevTele = \case
+relev :: Tele -> Tele
+relev = \case
   TeleNil -> TeleNil
-  TeleBind b -> TeleBind $ rebind (relevBdr bdr) (relevTele rest)
+  TeleBind b -> TeleBind $ rebind (relevBdr bdr) (relev rest)
     where (bdr, rest) = unrebind b
 
 relevBdr :: Bdr -> Bdr

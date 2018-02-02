@@ -1,6 +1,6 @@
 let 
   rien = import .rien/rien.nix {
-    packageName = "zeta";
+    packageName = "pico";
     packagePath = ./.;
 
     # Instead of using <nixpkgs>, use a lock-file to stick to

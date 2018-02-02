@@ -48,8 +48,17 @@ match p x = maybe mzero pure (x ^? p)
 --
 
 data TcEnv = TcEnv { _tcContext :: Tele, _tcSignature :: Sig }
+makeLenses ''TcEnv
 
 type TcT = ReaderT TcEnv
+
+type SigT = ReaderT Sig
+
+withTele :: Tele -> TcT m a -> SigT m a
+withTele ctx = withReaderT (TcEnv ctx)
+
+inTcT :: SigT m a -> TcT m a 
+inTcT = withReaderT (view tcSignature)
 
 coerProvesProp :: MonadPlus m => Co -> HetEq -> TcT m ()
 coerProvesProp = undefined
@@ -63,21 +72,21 @@ classifiesVecRev = undefined
 altResultKind :: MonadPlus m => TmAlt -> Kd -> TcT m ()
 altResultKind = undefined
 
-tyConDecomp :: MonadPlus m => Konst -> Tele -> Tele -> Konst -> m ()
+tyConDecomp :: MonadPlus m => Konst -> Tele -> Tele -> Konst -> TcT m ()
 tyConDecomp = undefined
 
-typeOfKind :: MonadPlus m => Ty -> Kd -> ReaderT (Sig, Tele) m ()
+typeOfKind :: MonadPlus m => Ty -> Kd -> TcT m ()
 typeOfKind = undefined
 
 propOk
   :: MonadPlus m
   => HetEq
-  -> ReaderT (Sig, Tele) m ()
+  -> TcT m ()
 propOk = undefined
 
 -- | Context well-formedness check.
 -- TODO disjointness checks?
-ctxOk :: (MonadPlus m, MonadError String m) => Tele -> ReaderT Sig m ()
+ctxOk :: (MonadPlus m, MonadError String m) => Tele -> SigT m ()
 ctxOk = \case
   TeleNil ->
     -- Ctx_Nil
@@ -86,12 +95,12 @@ ctxOk = \case
     [ do
       -- Ctx_TyVar
       (tv, r, k) <- match _BdrTm bdr
-      withReaderT (, relevTele tele) (typeOfKind k (TmConst KType []))
+      withTele (relev tele) (typeOfKind k (TmConst KType []))
       ctxOk tele
     , do
       -- Ctx_CoVar
       (cv, h) <- match _BdrCo bdr
-      withReaderT (, relevTele tele) (propOk h)
+      withTele (relev tele) (propOk h)
       ctxOk tele
     , throwError "No match"
     ]
