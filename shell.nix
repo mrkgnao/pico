@@ -59,6 +59,7 @@ in
       # llvm-hs-pure
       # llvm-hs-typed
 
+      contravariant
       unbound-generics
       ether
     ];

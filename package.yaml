@@ -36,6 +36,7 @@ dependencies:
   - adjunctions
   - deriving-compat
   - bound
+  - contravariant
 
 default-extensions:
   - LambdaCase

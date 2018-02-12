@@ -19,7 +19,7 @@
 
 module Types where
 
-import           Edible.Prelude
+import           CustomPrelude
 import           Unbound.Generics.LocallyNameless
 import           Unbound.Generics.LocallyNameless.Internal.Fold (toListOf)
 import           Control.Monad.Trans
@@ -179,6 +179,7 @@ _TmLamCo = prism fw bw
         _                 -> pure (Left t)
     _ -> Left t
 
+-- | Given a relevance, match term lambdas that bind terms with that relevance.
 _TmLamTm :: Rel -> Prism' Tm (Kd, Bind TmVar Tm)
 _TmLamTm rel = prism fw bw
  where
@@ -215,10 +216,12 @@ makePrisms ''TmArg
 makePrisms ''CoArg
 makeLenses ''TmAlt
 makeLenses ''CoAlt
+makePrisms ''Tele
 -- makePrisms ''Pat
 makePrisms ''PrimTy
 makePrisms ''PrimExp
 makePrisms ''PrimBinop
+makePrisms ''HetEq
 
 ------------------------------------------------------------
 -- Useful prisms

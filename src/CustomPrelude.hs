@@ -1,8 +1,9 @@
 {-# LANGUAGE ConstraintKinds       #-}
+{-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
-module Edible.Prelude
+module CustomPrelude
   ( module X
   , (>>>)
   , RecursionDepthM
@@ -12,6 +13,8 @@ module Edible.Prelude
   , LogItem(..)
   , Message(..)
   , logText
+  , liftMaybe
+  , match
   ) where
 
 import           Control.Applicative         as X
@@ -51,6 +54,8 @@ import           Data.Typeable               as X (Typeable)
 import           GHC.Generics                as X (Generic)
 import Data.Int as X
 
+import Data.Functor.Contravariant as X
+
 (>>>) :: (a -> b) -> (b -> c) -> a -> c
 (>>>) = (Control.Category.>>>)
 
@@ -78,4 +83,11 @@ logText :: (MonadWriter [LogItem a] m, RecursionDepthM env m) => a -> m ()
 logText t = do
   depth <- view recursionDepth
   tell [LogItem depth (Msg t)]
+
+liftMaybe :: MonadPlus m => Maybe a -> m a
+liftMaybe = maybe mzero pure
+{-# INLINE liftMaybe #-}
+
+match :: MonadPlus m => Fold a b -> a -> m b
+match p x = liftMaybe (preview p x)
 

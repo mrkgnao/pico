@@ -1,3 +1,9 @@
+-- This file has been generated from package.yaml by hpack version 0.21.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 9ea72e90c9f864e083c4136f51f9c33b13ded9d17c8c5376111715d07aac897b
+
 name:           pico
 version:        0.1.0.0
 homepage:       https://github.com/mrkgnao/pico#readme
@@ -35,6 +41,7 @@ executable pico
     , bound
     , comonad
     , containers
+    , contravariant
     , deriving-compat
     , ether
     , free
