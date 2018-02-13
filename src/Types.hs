@@ -222,6 +222,12 @@ makePrisms ''PrimTy
 makePrisms ''PrimExp
 makePrisms ''PrimBinop
 makePrisms ''HetEq
+makePrisms ''SigElt
+
+instance AsEmpty Tele where
+  _Empty = prism' (const TeleNil) $ \case 
+    TeleNil -> Just ()
+    TeleBind{} -> Nothing
 
 ------------------------------------------------------------
 -- Useful prisms

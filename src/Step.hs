@@ -34,6 +34,16 @@ import           Control.Monad.Trans
 import Types
 import Pretty
 
+(|+) = (,)
+
+firstWith :: (a -> Bool) -> [a] -> Maybe a
+firstWith cond [] = Nothing
+firstWith cond (x:xs) | cond x    = Just x
+                      | otherwise = firstWith cond xs
+
+withLog :: Applicative m => (r -> m ()) -> (r, m a) -> m a
+withLog f (ruleName, rule) = f ruleName *> rule
+
 data TcEnv = TcEnv { _tcContext :: Tele, _tcSignature :: Sig, _tcDepth :: Int }
 makeLenses ''TcEnv
 
@@ -48,74 +58,107 @@ withTele ctx = local (tcContext .~ ctx)
 withRelevTele :: Tele -> TcM a -> TcM a
 withRelevTele = withTele . relev
 
-----------------------------------------------------------------------
--- Stubbed-out judgments
-----------------------------------------------------------------------
+matchRules :: (RecursionDepthM env m, Alternative m) => [m a] -> m a
+matchRules = asum . map recur
 
-classifiesVec :: [TmArg] -> Tele -> TcM ()
-classifiesVec = undefined
+matchRulesWith
+  :: (RecursionDepthM env m, Alternative m) => (t -> m ()) -> [(t, m a)] -> m a
+matchRulesWith f = asum . map (recur . withLog f)
 
-classifiesVecRev :: [TmArg] -> Tele -> TcM ()
-classifiesVecRev = undefined
+buildJudgment
+  :: (RecursionDepthM env m, Alternative m)
+  => (s -> t -> m ())
+  -> (s -> [(t, m a)])
+  -> s
+  -> m a
+buildJudgment f rules arg = matchRulesWith (f arg) (rules arg)
+
+--------------------------------------------------------------------------------
+-- Case alternative kinds
+--------------------------------------------------------------------------------
 
 altResultKind :: TmAlt -> Kd -> TcM ()
-altResultKind = undefined
+altResultKind alt kd = matchRules (altResultKindRules alt kd)
 
--- | Type constant kinds, with universals d1 and existentials d2
-tyConDecomp :: Konst -> Tele -> Tele -> Konst -> TcM ()
-tyConDecomp h d1 d2 = undefined
+altResultKindRules :: TmAlt -> Kd -> [TcM ()]
+altResultKindRules alt kd = []
 
--- | Coercion formation
-coerSort :: Co -> HetEq -> TcM ()
-coerSort co h = asum (coerSortRules co h)
+--------------------------------------------------------------------------------
+-- Type constant kinds, with universals d1 and existentials d2
+--------------------------------------------------------------------------------
+ 
+tyConDecomp :: Tele -> Tele -> Konst -> TcM ()
+tyConDecomp d1 d2 h = matchRules (tyConDecompRules d1 d2 h)
 
--- | Context well-formedness check.
--- TODO disjointness checks?
-ctxOk :: TcM ()
-ctxOk = asum ctxOkRules
+tyConDecompRules :: Tele -> Tele -> Konst -> [TcM ()]
+tyConDecompRules d1 d2 h = []
 
--- Type formation
-typeKind :: Ty -> Kd -> TcM ()
-typeKind = undefined
+--------------------------------------------------------------------------------
+-- PropOk
+--------------------------------------------------------------------------------
 
 propOk :: HetEq -> TcM ()
-propOk = undefined
+propOk h = matchRules (propOkRules h)
 
-----------------------------------------------------------------------
-  -- CoerSort: coercion formation
-----------------------------------------------------------------------
+propOkRules :: HetEq -> [TcM ()]
+propOkRules h = []
 
-data CoerSortRule
+--------------------------------------------------------------------------------
+-- Type formation
+--------------------------------------------------------------------------------
+
+checkTypeKind :: Ty -> Kd -> TcM ()
+checkTypeKind ty kd = matchRules (checkTypeKindRules ty kd)
+
+checkTypeKindRules :: Ty -> Kd -> [TcM ()]
+checkTypeKindRules ty kd = []
+
+--------------------------------------------------------------------------------
+-- CoSort: coercion formation
+--------------------------------------------------------------------------------
+
+-- | Coercion formation
+inferCoSort :: Co -> TcM HetEq
+inferCoSort = buildJudgment logCoSortRule inferCoSortRules
+
+data CoSortRule
   = Co_Var
   | Co_Sym
   | Co_Trans
   | Co_Refl
   deriving Show
 
-logCoerSortRule :: Co -> HetEq -> CoerSortRule -> TcM ()
-logCoerSortRule co h s =
-  logText (group (vsep [ppr co, ":", ppr h, "-->" <+> ppr (show s)]))
+logCoSortRule :: Co -> CoSortRule -> TcM ()
+logCoSortRule co s = logText (group (vsep [ppr co, "-->" <+> ppr (show s)]))
 
 -- TODO separate TcM's reader layer out so that we can pass the
 -- environment in just once, instead of to every element of the list
-coerSortRules :: Co -> HetEq -> [TcM ()]
-coerSortRules co h =
-  [ do
-      logCoerSortRule co h Co_Sym
-      g                <- match _CoSym co
-      (t2, k2, k1, t1) <- match _HetEq h
-      coerSort g (_HetEq # (t1, k1, k2, t2))
-  , do
-      logCoerSortRule co h Co_Refl
-      tm <- match _CoRefl co
-      (t1, k1, k1', t1') <- match _HetEq h
-      -- assert (k1 == k1')
-      typeKind tm k1
-  ]
+inferCoSortRules :: Co -> [(CoSortRule, TcM HetEq)]
+inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl]
+ where
+  co_Var  = undefined
 
-----------------------------------------------------------------------
-  -- CtxOk
-----------------------------------------------------------------------
+  co_Sym  = undefined
+    -- do
+    -- g                <- match _CoSym co
+    -- (t2, k2, k1, t1) <- match _HetEq h
+    -- inferCoSort g (_HetEq # (t1, k1, k2, t2))
+  co_Refl = undefined
+    -- do
+    -- tm                 <- match _CoRefl co
+    -- (t1, k1, k1', t1') <- match _HetEq h
+    -- -- guard (k1 == k1')
+    -- -- guard (t1 == t1')
+    -- checkTypeKind tm k1
+
+--------------------------------------------------------------------------------
+-- CtxOk
+-- Context well-formedness check.
+--------------------------------------------------------------------------------
+
+-- TODO disjointness checks?
+ctxOk :: TcM ()
+ctxOk = matchRules ctxOkRules
 
 ctxOkRules :: [TcM ()]
 ctxOkRules =
@@ -128,7 +171,7 @@ ctxOkRules =
     (unrebind -> (bdr, tele)) <- match _TeleBind t0
     -- Ctx_TyVar
     (tv, r, k)                <- match _BdrTm bdr
-    withRelevTele tele (typeKind k (TmConst KType []))
+    withRelevTele tele (checkTypeKind k (TmConst KType []))
     withTele      tele ctxOk
   , do
     t0                        <- view tcContext
@@ -141,28 +184,30 @@ ctxOkRules =
   -- , throwError "No match"
   ]
 
-----------------------------------------------------------------------
-  -- SigOk
-----------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- SigOk
+--------------------------------------------------------------------------------
 
 sigOk :: TcM ()
-sigOk = view tcSignature >>= \s@(Sig sig) -> case sig of
-  [] ->
-    -- Sig_Nil
-    pure ()
-  (x:xs) -> case x of
-    SigTyCon tc tks -> withTele (teleOfAdtSig tks) ctxOk
-    SigDtCon k d t  -> do
-      let matchingTyCon = \case
-            SigTyCon t' _ -> t == t'
-            _             -> False
-      SigTyCon _ tks <- liftMaybe (firstWith matchingTyCon sig)
-      withTele (teleConcat (teleOfAdtSig tks) d) ctxOk
+sigOk = matchRules sigOkRules
 
-firstWith :: (a -> Bool) -> [a] -> Maybe a
-firstWith cond [] = Nothing
-firstWith cond (x:xs) | cond x    = Just x
-                      | otherwise = firstWith cond xs
+sigOkRules :: [TcM ()]
+sigOkRules =
+  [ do
+    Sig sig <- view tcSignature
+    match _Empty sig
+  , do
+    Sig sig <- view tcSignature
+    (x, xs) <- match _Cons sig
+    case x of
+      SigTyCon tc tks -> withTele (teleOfAdtSig tks) ctxOk
+      SigDtCon k d t  -> do
+        let matchingTyCon = \case
+              SigTyCon t' _ -> t == t'
+              _             -> False
+        SigTyCon _ tks <- liftMaybe (firstWith matchingTyCon sig)
+        withTele (teleConcat (teleOfAdtSig tks) d) ctxOk
+  ]
 
 teleOfAdtSig :: [(TmVar, Kd)] -> Tele
 teleOfAdtSig = \case
@@ -174,22 +219,68 @@ teleConcat TeleNil t = t
 teleConcat (TeleBind (unrebind -> (bdr, t))) t' =
   TeleBind (rebind bdr (teleConcat t t'))
 
-----------------------------------------------------------------------
-  -- Small-step reduction
-----------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- Type-vector formation, forwards
+--------------------------------------------------------------------------------
 
-type FreshT = FreshMT
-type BaseT m = ReaderT StepEnv (WriterT [LogItem Doc] m)
-type StepM = FreshT (BaseT Maybe)
+clsVec :: ClsVecArgs -> TcM ()
+clsVec = buildJudgment logClsVecRule clsVecRules
+
+data ClsVecArgs = ClsVecArgs [TmArg] Tele
+
+data ClsVecRule
+  = Vec_Nil
+  | Vec_TyRel
+  | Vec_TyIrrel
+  | Vec_Co
+  deriving Show
+
+logClsVecRule :: ClsVecArgs -> ClsVecRule -> TcM ()
+logClsVecRule (ClsVecArgs tas tele) s = logText (group (vsep [ppr (show s)]))
+
+clsVecRules :: ClsVecArgs -> [(ClsVecRule, TcM ())]
+clsVecRules args@(ClsVecArgs tas tele) = [Vec_Nil |+ vec_Nil]
+ where
+  vec_Nil = do
+    match _Empty tele
+    match _Empty tas
+    ctxOk
+
+--------------------------------------------------------------------------------
+-- Type-vector formation, reversed
+--------------------------------------------------------------------------------
+
+clsCev :: ClsCevArgs -> TcM ()
+clsCev = buildJudgment logClsCevRule clsCevRules
+
+data ClsCevArgs = ClsCevArgs [TmArg] Tele
+
+data ClsCevRule
+  = Cev_Nil
+  | Cev_TyRel
+  | Cev_TyIrrel
+  | Cev_Co
+  deriving Show
+
+logClsCevRule :: ClsCevArgs -> ClsCevRule -> TcM ()
+logClsCevRule (ClsCevArgs tas tele) s = logText (group (vsep [ppr (show s)]))
+
+clsCevRules :: ClsCevArgs -> [(ClsCevRule, TcM ())]
+clsCevRules args@(ClsCevArgs tas tele) = [Cev_Nil |+ vec_Nil]
+ where
+  vec_Nil = do
+    match _Empty tele
+    match _Empty tas
+    ctxOk
+
+--------------------------------------------------------------------------------
+-- Small-step reduction
+--------------------------------------------------------------------------------
 
 data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
 makeLenses ''StepEnv
 
-env :: StepEnv
-env = StepEnv {_stepContext = TeleNil, _stepRecursionDepth = 0}
-
-instance HasRecursionDepth StepEnv where
-  recursionDepth = stepRecursionDepth
+type StepArgs = Tm
 
 data StepRule
   = S_BetaRel
@@ -213,50 +304,33 @@ data StepRule
   | S_FPush
   deriving Show
 
-eval :: Tm -> IO ()
-eval = go 1
- where
-  go :: Int -> Tm -> IO ()
-  go n tm = case runStep tm of
-    Nothing       -> renderStdout tm
-    Just (tm', l) -> do
-      putDoc (" #" <> ppr n <+> align (vcat (map applyIndents l)) <> "\n")
-      go (n + 1) tm'
-
-applyIndents :: LogItem Doc -> Doc
-applyIndents (LogItem n (Msg d)) = indent (2 * n) d
-
-runStep :: Tm -> Maybe (Tm, [LogItem Doc])
-runStep tm = step tm & runFreshMT & flip runReaderT env & runWriterT
-
 step :: Tm -> StepM Tm
-step tm = asum (stepRules tm)
+step = buildJudgment logRule stepRules
 
-logRule :: Tm -> StepRule -> StepM ()
+logRule :: StepArgs -> StepRule -> StepM ()
 logRule tm s = logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
 
-stepRules :: Tm -> [StepM Tm]
-stepRules tm = map
-  (\(rule, f) -> recur (logRule tm rule *> f))
-  [ (S_BetaRel          , s_BetaRel)
-  , (S_BetaIrrel        , s_BetaIrrel)
-  , (S_CBeta            , s_CBeta)
-  , (S_Unroll           , s_Unroll)
-  , (S_App_Cong_Tm      , s_App_Cong_Tm)
-  , (S_App_Cong_Co      , s_App_Cong_Co)
-  , (S_Cast_Cong        , s_Cast_Cong)
-  , (S_Case_Cong        , s_Case_Cong)
-  , (S_Fix_Cong         , s_Fix_Cong)
-  , (S_IrrelAbs_Cong    , s_IrrelAbs_Cong)
-  , (S_Binop_Double_Cong, s_Binop_Double_Cong)
-  , (S_Binop_Right_Cong , s_Binop_Right_Cong)
-  , (S_Binop_Left_Cong  , s_Binop_Left_Cong)
-  , (S_Prim_EvalIntAdd  , s_Prim_EvalIntAdd)
-  , (S_Prim_EvalIntMul  , s_Prim_EvalIntMul)
-  , (S_Trans            , s_Trans)
-  , (S_Match            , s_Match)
-  , (S_APush            , s_APush)
-  , (S_FPush            , s_FPush)
+stepRules :: StepArgs -> [(StepRule, StepM Tm)]
+stepRules tm =
+  [ S_BetaRel |+ s_BetaRel
+  , S_BetaIrrel |+ s_BetaIrrel
+  , S_CBeta |+ s_CBeta
+  , S_Unroll |+ s_Unroll
+  , S_App_Cong_Tm |+ s_App_Cong_Tm
+  , S_App_Cong_Co |+ s_App_Cong_Co
+  , S_Cast_Cong |+ s_Cast_Cong
+  , S_Case_Cong |+ s_Case_Cong
+  , S_Fix_Cong |+ s_Fix_Cong
+  , S_IrrelAbs_Cong |+ s_IrrelAbs_Cong
+  , S_Binop_Double_Cong |+ s_Binop_Double_Cong
+  , S_Binop_Right_Cong |+ s_Binop_Right_Cong
+  , S_Binop_Left_Cong |+ s_Binop_Left_Cong
+  , S_Prim_EvalIntAdd |+ s_Prim_EvalIntAdd
+  , S_Prim_EvalIntMul |+ s_Prim_EvalIntMul
+  , S_Trans |+ s_Trans
+  , S_Match |+ s_Match
+  , S_APush |+ s_APush
+  , S_FPush |+ s_FPush
   ]
  where
   stepIntBinop :: (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
@@ -319,7 +393,7 @@ stepRules tm = map
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
-    match _TmPrimBinop tm >>= _2 step >>= _3 step
+    match _TmPrimBinop tm >>= traverseOf _2 step >>= traverseOf _3 step
 
   s_Binop_Left_Cong  = congStep _2 _TmPrimBinop
   s_Binop_Right_Cong = congStep _3 _TmPrimBinop
@@ -327,13 +401,11 @@ stepRules tm = map
   -- Push rules
 
   s_Trans            = do
-    logRule tm S_Trans
     (x, g2) <- match _TmCast tm
     (v, g1) <- match _TmCast x
     pure (_TmCast # (v, _CoTrans # (g1, g2)))
 
   s_Match = do
-    logRule tm S_Match
     (scrutinee, _k, tmAlts) <- match _TmCase tm
     (h', phis)              <- match _TmApps scrutinee
     (h , taus)              <- match _TmConst h'
@@ -347,7 +419,6 @@ stepRules tm = map
 
   -- TODO
   s_APush = do
-    logRule tm S_APush
     (k, bd  ) <- match _TmIrrelLam tm
     (a, body) <- unbind bd
     (v, g   ) <- match _TmCast body
@@ -357,7 +428,6 @@ stepRules tm = map
     undefined
 
   s_FPush = do
-    logRule tm S_FPush
     (lam, g0   ) <- match (_TmFix . _TmCast) tm
     (kd , bdr  ) <- match _TmRelLam lam
     (a  , sigma) <- unbind bdr
@@ -377,6 +447,36 @@ stepRules tm = map
     let fixArg = _TmRelLam # (kd, bind a (_TmCast # (sigma, g1))) -- \(a : k) . (sigma |> g1)
 
     pure (_TmCast # (_TmFix # fixArg, g2)) -- fix fixArg |> g2
+
+--------------------------------------------------------------------------------
+-- Utils
+--------------------------------------------------------------------------------
+
+type FreshT = FreshMT
+type BaseT m = ReaderT StepEnv (WriterT [LogItem Doc] m)
+type StepM = FreshT (BaseT Maybe)
+
+env :: StepEnv
+env = StepEnv {_stepContext = TeleNil, _stepRecursionDepth = 0}
+
+instance HasRecursionDepth StepEnv where
+  recursionDepth = stepRecursionDepth
+
+eval :: Tm -> IO ()
+eval = go 1
+ where
+  go :: Int -> Tm -> IO ()
+  go n tm = case runStep tm of
+    Nothing       -> renderStdout tm
+    Just (tm', l) -> do
+      putDoc (" #" <> ppr n <+> align (vcat (map applyIndents l)) <> "\n")
+      go (n + 1) tm'
+
+applyIndents :: LogItem Doc -> Doc
+applyIndents (LogItem n (Msg d)) = indent (2 * n) d
+
+runStep :: Tm -> Maybe (Tm, [LogItem Doc])
+runStep tm = step tm & runFreshMT & flip runReaderT env & runWriterT
 
 substInto
   :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
