@@ -44,22 +44,19 @@ firstWith cond (x:xs) | cond x    = Just x
 withLog :: Applicative m => (r -> m ()) -> (r, m a) -> m a
 withLog f (ruleName, rule) = f ruleName *> rule
 
-data TcEnv = TcEnv { _tcContext :: Tele, _tcSignature :: Sig, _tcDepth :: Int }
-makeLenses ''TcEnv
+data PicoEnv = PicoEnv { _tcContext :: Tele, _tcSignature :: Sig, _tcDepth :: Int }
+makeLenses ''PicoEnv
 
-type FreshT = FreshMT
-type BaseT m = ReaderT TcEnv (WriterT [LogItem Doc] m)
+env :: PicoEnv
+env = PicoEnv {_tcContext = TeleNil, _tcSignature = Sig [], _tcDepth = 0}
 
-env :: TcEnv
-env = TcEnv {_tcContext = TeleNil, _tcSignature = Sig [], _tcDepth = 0}
+instance HasRecursionDepth PicoEnv where recursionDepth = tcDepth
 
-instance HasRecursionDepth TcEnv where recursionDepth = tcDepth
-
-newtype TcM a = TcM { unTcM :: FreshT (ReaderT TcEnv (WriterT [LogItem Doc] Maybe)) a }
+newtype Pico a = Pico { unPico :: FreshMT (ReaderT PicoEnv (WriterT [LogItem Doc] Maybe)) a }
   deriving ( Functor
            , Applicative
            , Monad
-           , MonadReader TcEnv
+           , MonadReader PicoEnv
            , MonadWriter [LogItem Doc]
            , MonadPlus
            , Alternative
@@ -67,10 +64,10 @@ newtype TcM a = TcM { unTcM :: FreshT (ReaderT TcEnv (WriterT [LogItem Doc] Mayb
            )
 
 
-withTele :: Tele -> TcM a -> TcM a
+withTele :: Tele -> Pico a -> Pico a
 withTele ctx = local (tcContext .~ ctx)
 
-withRelevTele :: Tele -> TcM a -> TcM a
+withRelevTele :: Tele -> Pico a -> Pico a
 withRelevTele = withTele . relev
 
 matchRules :: (RecursionDepthM env m, Alternative m) => [m a] -> m a
@@ -92,46 +89,50 @@ buildJudgment logger rules arg = matchRulesWith (logger arg) (rules arg)
 -- Case alternative kinds
 --------------------------------------------------------------------------------
 
-altResultKind :: TmAlt -> Kd -> TcM ()
+altResultKind :: TmAlt -> Kd -> Pico ()
 altResultKind alt kd = matchRules (altResultKindRules alt kd)
 
-altResultKindRules :: TmAlt -> Kd -> [TcM ()]
+altResultKindRules :: TmAlt -> Kd -> [Pico ()]
 altResultKindRules alt kd = []
 
 --------------------------------------------------------------------------------
 -- Type constant kinds, with universals d1 and existentials d2
 --------------------------------------------------------------------------------
 
-tyConDecomp :: Tele -> Tele -> Konst -> TcM ()
+tyConDecomp :: Tele -> Tele -> Konst -> Pico ()
 tyConDecomp d1 d2 h = matchRules (tyConDecompRules d1 d2 h)
 
-tyConDecompRules :: Tele -> Tele -> Konst -> [TcM ()]
+tyConDecompRules :: Tele -> Tele -> Konst -> [Pico ()]
 tyConDecompRules d1 d2 h = []
 
 --------------------------------------------------------------------------------
 -- PropOk
 --------------------------------------------------------------------------------
 
-propOk :: HetEq -> TcM ()
+propOk :: HetEq -> Pico ()
 propOk h = matchRules (propOkRules h)
 
-propOkRules :: HetEq -> [TcM ()]
+propOkRules :: HetEq -> [Pico ()]
 propOkRules h = []
 
 --------------------------------------------------------------------------------
 -- Type formation
 --------------------------------------------------------------------------------
 
-checkTypeKind :: Ty -> Kd -> TcM ()
+checkTypeKind :: Ty -> Kd -> Pico ()
 checkTypeKind ty kd = matchRules (checkTypeKindRules ty kd)
 
-checkTypeKindRules :: Ty -> Kd -> [TcM ()]
-checkTypeKindRules ty kd = []
+checkTypeKindRules :: Ty -> Kd -> [Pico ()]
+checkTypeKindRules ty kd =
+  [ do
+      kd' <- inferTypeKind ty
+      guard (kd `aeq` kd')
+  ]
 
-inferTypeKind :: Ty -> TcM Kd
+inferTypeKind :: Ty -> Pico Kd
 inferTypeKind ty = matchRules (inferTypeKindRules ty)
 
-inferTypeKindRules :: Ty -> [TcM Kd]
+inferTypeKindRules :: Ty -> [Pico Kd]
 inferTypeKindRules ty = []
 
 --------------------------------------------------------------------------------
@@ -139,7 +140,7 @@ inferTypeKindRules ty = []
 --------------------------------------------------------------------------------
 
 -- | Coercion formation
-inferCoSort :: Co -> TcM HetEq
+inferCoSort :: Co -> Pico HetEq
 inferCoSort = buildJudgment logCoSortRule inferCoSortRules
 
 data CoSortRule
@@ -149,7 +150,7 @@ data CoSortRule
   | Co_Refl
   deriving Show
 
-logCoSortRule :: Co -> CoSortRule -> TcM ()
+logCoSortRule :: Co -> CoSortRule -> Pico ()
 logCoSortRule co s = logText (group (vsep [ppr co, "-->" <+> ppr (show s)]))
 
 findCoVarTele :: MonadPlus m => CoVar -> Tele -> m HetEq
@@ -158,12 +159,12 @@ findCoVarTele c (TeleBind (unrebind -> (bdr, tele))) = case bdr of
   BdrTm{}            -> mzero
   BdrCo c' (Embed h) -> if c `aeq` c' then pure h else findCoVarTele c tele
 
-matchingCoVar :: CoVar -> TcM HetEq
+matchingCoVar :: CoVar -> Pico HetEq
 matchingCoVar c = view tcContext >>= findCoVarTele c
 
--- TODO separate TcM's reader layer out so that we can pass the
+-- TODO separate Pico's reader layer out so that we can pass the
 -- environment in just once, instead of to every element of the list
-inferCoSortRules :: Co -> [(CoSortRule, TcM HetEq)]
+inferCoSortRules :: Co -> [(CoSortRule, Pico HetEq)]
 inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl]
  where
   co_Var = do
@@ -189,10 +190,10 @@ inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl]
 --------------------------------------------------------------------------------
 
 -- TODO disjointness checks?
-ctxOk :: TcM ()
+ctxOk :: Pico ()
 ctxOk = matchRules ctxOkRules
 
-ctxOkRules :: [TcM ()]
+ctxOkRules :: [Pico ()]
 ctxOkRules =
   [ do
     t0 <- view tcContext
@@ -220,10 +221,10 @@ ctxOkRules =
 -- SigOk
 --------------------------------------------------------------------------------
 
-sigOk :: TcM ()
+sigOk :: Pico ()
 sigOk = matchRules sigOkRules
 
-sigOkRules :: [TcM ()]
+sigOkRules :: [Pico ()]
 sigOkRules =
   [ do
     Sig sig <- view tcSignature
@@ -232,8 +233,8 @@ sigOkRules =
     Sig sig <- view tcSignature
     (x, xs) <- match _Cons sig
     case x of
-      SigTyCon tc tks -> withTele (teleOfAdtSig tks) ctxOk
-      SigDtCon k d t  -> do
+      SigTyCon _tc tks -> withTele (teleOfAdtSig tks) ctxOk
+      SigDtCon k d t   -> do
         let matchingTyCon = \case
               SigTyCon t' _ -> t == t'
               _             -> False
@@ -255,7 +256,7 @@ teleConcat (TeleBind (unrebind -> (bdr, t))) t' =
 -- Type-vector formation, forwards
 --------------------------------------------------------------------------------
 
-clsVec :: ClsVecArgs -> TcM ()
+clsVec :: ClsVecArgs -> Pico ()
 clsVec = buildJudgment logClsVecRule clsVecRules
 
 data ClsVecArgs = ClsVecArgs [TmArg] Tele
@@ -267,10 +268,10 @@ data ClsVecRule
   | Vec_Co
   deriving Show
 
-logClsVecRule :: ClsVecArgs -> ClsVecRule -> TcM ()
+logClsVecRule :: ClsVecArgs -> ClsVecRule -> Pico ()
 logClsVecRule (ClsVecArgs tas tele) s = logText (group (vsep [ppr (show s)]))
 
-clsVecRules :: ClsVecArgs -> [(ClsVecRule, TcM ())]
+clsVecRules :: ClsVecArgs -> [(ClsVecRule, Pico ())]
 clsVecRules args@(ClsVecArgs tas tele) = [Vec_Nil |+ vec_Nil]
  where
   vec_Nil = do
@@ -282,7 +283,7 @@ clsVecRules args@(ClsVecArgs tas tele) = [Vec_Nil |+ vec_Nil]
 -- Type-vector formation, reversed
 --------------------------------------------------------------------------------
 
-clsCev :: ClsCevArgs -> TcM ()
+clsCev :: ClsCevArgs -> Pico ()
 clsCev = buildJudgment logClsCevRule clsCevRules
 
 data ClsCevArgs = ClsCevArgs [TmArg] Tele
@@ -294,10 +295,10 @@ data ClsCevRule
   | Cev_Co
   deriving Show
 
-logClsCevRule :: ClsCevArgs -> ClsCevRule -> TcM ()
+logClsCevRule :: ClsCevArgs -> ClsCevRule -> Pico ()
 logClsCevRule (ClsCevArgs tas tele) s = logText (group (vsep [ppr (show s)]))
 
-clsCevRules :: ClsCevArgs -> [(ClsCevRule, TcM ())]
+clsCevRules :: ClsCevArgs -> [(ClsCevRule, Pico ())]
 clsCevRules args@(ClsCevArgs tas tele) = [Cev_Nil |+ vec_Nil]
  where
   vec_Nil = do
@@ -333,13 +334,13 @@ data StepRule
   | S_FPush
   deriving Show
 
-step :: Tm -> TcM Tm
+step :: Tm -> Pico Tm
 step = buildJudgment logRule stepRules
 
-logRule :: StepArgs -> StepRule -> TcM ()
+logRule :: StepArgs -> StepRule -> Pico ()
 logRule tm s = logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
 
-stepRules :: StepArgs -> [(StepRule, TcM Tm)]
+stepRules :: StepArgs -> [(StepRule, Pico Tm)]
 stepRules tm =
   [ S_BetaRel |+ s_BetaRel
   , S_BetaIrrel |+ s_BetaIrrel
@@ -362,7 +363,7 @@ stepRules tm =
   , S_FPush |+ s_FPush
   ]
  where
-  stepIntBinop :: (Int -> Int -> Int) -> Prism' PrimBinop () -> TcM Tm
+  stepIntBinop :: (Int -> Int -> Int) -> Prism' PrimBinop () -> Pico Tm
   stepIntBinop f p = do
     (op, l', r') <- match _TmPrimBinop tm
     match p op
@@ -397,14 +398,14 @@ stepRules tm =
 
   -- Congruence forms
 
-  congStep :: Lens' a Tm -> Prism' Tm a -> TcM Tm
+  congStep :: Lens' a Tm -> Prism' Tm a -> Pico Tm
   congStep l pr = review pr <$> do
     match pr tm >>= l step
 
-  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> TcM Tm
+  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> Pico Tm
   cong1 = congStep _1
 
-  cong :: Prism' Tm Tm -> TcM Tm
+  cong :: Prism' Tm Tm -> Pico Tm
   cong            = congStep id
 
   s_App_Cong_Tm   = cong1 _TmAppTm
@@ -491,7 +492,7 @@ applyIndents :: LogItem Doc -> Doc
 applyIndents (LogItem n (Msg d)) = indent (2 * n) d
 
 runStep :: Tm -> Maybe (Tm, [LogItem Doc])
-runStep tm = step tm & unTcM & runFreshMT & flip runReaderT env & runWriterT
+runStep tm = step tm & unPico & runFreshMT & flip runReaderT env & runWriterT
 
 substInto
   :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
