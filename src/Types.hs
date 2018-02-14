@@ -15,6 +15,7 @@
 {-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE TypeOperators             #-}
+{-# LANGUAGE ViewPatterns              #-}
 {-# LANGUAGE TypeSynonymInstances      #-}
 
 module Types where
@@ -78,8 +79,8 @@ teleSnoc x = \case
 relev :: Tele -> Tele
 relev = \case
   TeleNil -> TeleNil
-  TeleBind b -> TeleBind $ rebind (relevBdr bdr) (relev rest)
-    where (bdr, rest) = unrebind b
+  -- TeleBind b -> TeleBind (uncurry rebind (bimap relevBdr relev (unrebind b)))
+  TeleBind (unrebind -> (bdr, rest)) -> TeleBind (rebind (relevBdr bdr) (relev rest))
 
 relevBdr :: Bdr -> Bdr
 relevBdr = \case
@@ -191,6 +192,24 @@ _TmLamTm rel = prism fw bw
         (Right (kd, bind v b))
       _ -> pure (Left t)
     _ -> Left t
+
+_TmPiTm :: Rel -> Prism' Tm (DepQ, Kd, Bind TmVar Tm)
+_TmPiTm rel = prism fw bw
+ where
+  fw (dep, kd, bd) = runLFreshM . lunbind bd $ \(v, b) ->
+    pure (TmPi dep (bind (BdrTm v (Embed rel) (Embed kd)) b))
+  bw t = case t of
+    TmPi dep bd -> runLFreshM . lunbind bd $ \(vv, b) -> case vv of
+      BdrTm v (Embed rel') (Embed kd) | rel == rel' -> pure
+        (Right (dep, kd, bind v b))
+      _ -> pure (Left t)
+    _ -> Left t
+
+_TmRelPi :: Prism' Tm (DepQ, Kd, Bind TmVar Tm)
+_TmRelPi = _TmPiTm Rel
+
+_TmIrrelPi :: Prism' Tm (DepQ, Kd, Bind TmVar Tm)
+_TmIrrelPi = _TmPiTm Irrel
 
 _TmRelLam :: Prism' Tm (Kd, Bind TmVar Tm)
 _TmRelLam = _TmLamTm Rel

@@ -76,6 +76,9 @@ newtype Pico a = Pico { unPico :: FreshMT (ReaderT PicoEnv (WriterT [LogItem Doc
            , Fresh
            )
 
+runPico :: Pico a -> Maybe (a, [LogItem Doc])
+runPico a = a & unPico & runFreshMT & flip runReaderT env & runWriterT
+
 matchingCoVar :: CoVar -> Pico HetEq
 matchingCoVar c = view tcContext >>= findCoVarTele c
 
@@ -87,6 +90,9 @@ withTele ctx = local (tcContext .~ ctx)
 
 withRelevTele :: Tele -> Pico a -> Pico a
 withRelevTele = withTele . relev
+
+localRelev :: Pico a -> Pico a
+localRelev = local (tcContext %~ relev)
 
 matchRules :: (RecursionDepthM env m, Alternative m) => [m a] -> m a
 matchRules = asum . map recur
@@ -103,7 +109,20 @@ buildJudgment
   -> m a
 buildJudgment logger rules arg = matchRulesWith (logger arg) (rules arg)
 
-unimplemented = error "unimplemented"
+warn :: Doc -> Pico a
+warn d = logText d *> mzero
+
+unimplemented :: Doc -> Pico a
+unimplemented d = warn ("unimplemented: " <+> d)
+
+applyIndents :: LogItem Doc -> Doc
+applyIndents (LogItem n (Msg d)) = indent (2 * n) d
+
+substInto
+  :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
+substInto orig rhs = do
+  (v, body) <- unbind orig
+  pure (subst v rhs body)
 
 --------------------------------------------------------------------------------
 -- Case alternative kinds
@@ -113,7 +132,7 @@ altResultKind :: TmAlt -> Kd -> Pico ()
 altResultKind alt kd = matchRules (altResultKindRules alt kd)
 
 altResultKindRules :: TmAlt -> Kd -> [Pico ()]
-altResultKindRules alt kd = [unimplemented]
+altResultKindRules alt kd = [unimplemented "altResultKindRules"]
 
 --------------------------------------------------------------------------------
 -- Type constant kinds, with universals d1 and existentials d2
@@ -123,7 +142,7 @@ tyConDecomp :: Tele -> Tele -> Konst -> Pico ()
 tyConDecomp d1 d2 h = matchRules (tyConDecompRules d1 d2 h)
 
 tyConDecompRules :: Tele -> Tele -> Konst -> [Pico ()]
-tyConDecompRules d1 d2 h = [unimplemented]
+tyConDecompRules d1 d2 h = [unimplemented "tyConDecompRules"]
 
 --------------------------------------------------------------------------------
 -- PropOk
@@ -197,19 +216,31 @@ inferTypeKindRules ty =
     match _Rel r
     ctxOk
     pure k
-  ty_Con      = unimplemented
-  ty_AppRel   = unimplemented
-  ty_AppIrrel = unimplemented
-  ty_CApp     = unimplemented
-  ty_Pi       = unimplemented
-  ty_Cast     = unimplemented
-  ty_Case     = unimplemented
+  ty_Con      = unimplemented "ty_Con"
+  ty_AppRel   = do
+    (t1, t2) <- match _TmAppTm ty
+    tau1k <- inferTypeKind t1
+    tau2k <- inferTypeKind t2
+    (_dep, k1, k2) <- match _TmRelPi tau1k
+    guard (tau2k `aeq` k1)
+    substInto k2 t2
+  ty_AppIrrel = do
+    (t1, t2) <- match _TmAppTm ty
+    tau1k <- inferTypeKind t1
+    tau2k <- localRelev (inferTypeKind t2)
+    (_dep, k1, k2) <- match _TmIrrelPi tau1k
+    guard (tau2k `aeq` k1)
+    substInto k2 t2
+  ty_CApp     = unimplemented "ty_CApp"
+  ty_Pi       = unimplemented "ty_Pi"
+  ty_Cast     = unimplemented "ty_Cast"
+  ty_Case     = unimplemented "ty_Case"
   ty_Lam      = do
     bd           <- match _TmLam ty
     (delta, tau) <- unbind bd
     local (tcContext %~ teleSnoc delta) (inferTypeKind tau)
-  ty_Fix    = unimplemented
-  ty_Absurd = unimplemented
+  ty_Fix    = unimplemented "ty_Fix"
+  ty_Absurd = unimplemented "ty_Absurd"
 
 --------------------------------------------------------------------------------
 -- CoSort: coercion formation
@@ -401,53 +432,72 @@ data StepRule
   = S_BetaRel
   | S_BetaIrrel
   | S_CBeta
+  | S_Match
+  | S_Default
+  | S_DefaultCo
   | S_Unroll
+  | S_Trans
+  | S_IrrelAbs_Cong
   | S_App_Cong_Tm
   | S_App_Cong_Co
   | S_Cast_Cong
   | S_Case_Cong
   | S_Fix_Cong
-  | S_IrrelAbs_Cong
-  | S_Binop_Left_Cong
-  | S_Binop_Right_Cong
-  | S_Binop_Double_Cong
-  | S_Prim_EvalIntAdd
-  | S_Prim_EvalIntMul
-  | S_Trans
-  | S_Match
+  | S_PushRel
+  | S_PushIrrel
+  | S_CPush
   | S_APush
   | S_FPush
+  | S_KPush
+  | S_Binop_Double_Cong
+  | S_Binop_Left_Cong
+  | S_Binop_Right_Cong
+  | S_Prim_EvalIntAdd
+  | S_Prim_EvalIntMul
   deriving Show
 
 step :: Tm -> Pico Tm
-step = buildJudgment logRule stepRules
+step = buildJudgment logStepRule stepRules
 
-logRule :: StepArgs -> StepRule -> Pico ()
-logRule tm s = logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
+logStepRule :: StepArgs -> StepRule -> Pico ()
+logStepRule tm s = logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
 
 stepRules :: StepArgs -> [(StepRule, Pico Tm)]
 stepRules tm =
   [ S_BetaRel |+ s_BetaRel
   , S_BetaIrrel |+ s_BetaIrrel
   , S_CBeta |+ s_CBeta
+  , S_Match |+ s_Match
+  , S_Default |+ s_Default
+  , S_DefaultCo |+ s_DefaultCo
   , S_Unroll |+ s_Unroll
+  , S_Trans |+ s_Trans
+  , S_IrrelAbs_Cong |+ s_IrrelAbs_Cong
   , S_App_Cong_Tm |+ s_App_Cong_Tm
   , S_App_Cong_Co |+ s_App_Cong_Co
   , S_Cast_Cong |+ s_Cast_Cong
   , S_Case_Cong |+ s_Case_Cong
   , S_Fix_Cong |+ s_Fix_Cong
-  , S_IrrelAbs_Cong |+ s_IrrelAbs_Cong
-  , S_Binop_Double_Cong |+ s_Binop_Double_Cong
-  , S_Binop_Right_Cong |+ s_Binop_Right_Cong
-  , S_Binop_Left_Cong |+ s_Binop_Left_Cong
-  , S_Prim_EvalIntAdd |+ s_Prim_EvalIntAdd
-  , S_Prim_EvalIntMul |+ s_Prim_EvalIntMul
-  , S_Trans |+ s_Trans
-  , S_Match |+ s_Match
+  , S_PushRel |+ s_PushRel
+  , S_PushIrrel |+ s_PushIrrel
+  , S_CPush |+ s_CPush
   , S_APush |+ s_APush
   , S_FPush |+ s_FPush
+  , S_KPush |+ s_KPush
+  , S_Binop_Double_Cong |+ s_Binop_Double_Cong
+  , S_Binop_Left_Cong |+ s_Binop_Left_Cong
+  , S_Binop_Right_Cong |+ s_Binop_Right_Cong
+  , S_Prim_EvalIntAdd |+ s_Prim_EvalIntAdd
+  , S_Prim_EvalIntMul |+ s_Prim_EvalIntMul
   ]
  where
+  s_Default = unimplemented "s_Default"
+  s_DefaultCo = unimplemented "s_DefaultCo"
+  s_PushRel = unimplemented "s_PushRel"
+  s_PushIrrel = unimplemented "s_PushIrrel"
+  s_CPush = unimplemented "s_CPush"
+  s_KPush = unimplemented "s_KPush"
+
   stepIntBinop :: (Int -> Int -> Int) -> Prism' PrimBinop () -> Pico Tm
   stepIntBinop f p = do
     (op, l', r') <- match _TmPrimBinop tm
@@ -573,17 +623,12 @@ eval = go 1
       putDoc (" #" <> ppr n <+> align (vcat (map applyIndents l)) <> "\n")
       go (n + 1) tm'
 
-applyIndents :: LogItem Doc -> Doc
-applyIndents (LogItem n (Msg d)) = indent (2 * n) d
-
 runStep :: Tm -> Maybe (Tm, [LogItem Doc])
-runStep tm = step tm & unPico & runFreshMT & flip runReaderT env & runWriterT
+runStep tm = runPico (step tm)
 
-substInto
-  :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
-substInto orig rhs = do
-  (v, body) <- unbind orig
-  pure (subst v rhs body)
+----------------------------------------------------------------------
+-- Smart constructors, examples
+----------------------------------------------------------------------
 
 -- | \\ {r} (v : t) -> b
 tlam :: Rel -> TmVar -> Tm -> Tm -> Tm
