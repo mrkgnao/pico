@@ -47,10 +47,25 @@ withLog f (ruleName, rule) = f ruleName *> rule
 data TcEnv = TcEnv { _tcContext :: Tele, _tcSignature :: Sig, _tcDepth :: Int }
 makeLenses ''TcEnv
 
+type FreshT = FreshMT
+type BaseT m = ReaderT TcEnv (WriterT [LogItem Doc] m)
+
+env :: TcEnv
+env = TcEnv {_tcContext = TeleNil, _tcSignature = Sig [], _tcDepth = 0}
+
 instance HasRecursionDepth TcEnv where recursionDepth = tcDepth
 
-newtype TcM a = TcM { unTcM :: ReaderT TcEnv (WriterT [LogItem Doc] Maybe) a }
-  deriving (Functor, Applicative, Monad, MonadReader TcEnv, MonadWriter [LogItem Doc], MonadPlus, Alternative)
+newtype TcM a = TcM { unTcM :: FreshT (ReaderT TcEnv (WriterT [LogItem Doc] Maybe)) a }
+  deriving ( Functor
+           , Applicative
+           , Monad
+           , MonadReader TcEnv
+           , MonadWriter [LogItem Doc]
+           , MonadPlus
+           , Alternative
+           , Fresh
+           )
+
 
 withTele :: Tele -> TcM a -> TcM a
 withTele ctx = local (tcContext .~ ctx)
@@ -71,7 +86,7 @@ buildJudgment
   -> (s -> [(t, m a)])
   -> s
   -> m a
-buildJudgment f rules arg = matchRulesWith (f arg) (rules arg)
+buildJudgment logger rules arg = matchRulesWith (logger arg) (rules arg)
 
 --------------------------------------------------------------------------------
 -- Case alternative kinds
@@ -86,7 +101,7 @@ altResultKindRules alt kd = []
 --------------------------------------------------------------------------------
 -- Type constant kinds, with universals d1 and existentials d2
 --------------------------------------------------------------------------------
- 
+
 tyConDecomp :: Tele -> Tele -> Konst -> TcM ()
 tyConDecomp d1 d2 h = matchRules (tyConDecompRules d1 d2 h)
 
@@ -113,6 +128,12 @@ checkTypeKind ty kd = matchRules (checkTypeKindRules ty kd)
 checkTypeKindRules :: Ty -> Kd -> [TcM ()]
 checkTypeKindRules ty kd = []
 
+inferTypeKind :: Ty -> TcM Kd
+inferTypeKind ty = matchRules (inferTypeKindRules ty)
+
+inferTypeKindRules :: Ty -> [TcM Kd]
+inferTypeKindRules ty = []
+
 --------------------------------------------------------------------------------
 -- CoSort: coercion formation
 --------------------------------------------------------------------------------
@@ -131,25 +152,36 @@ data CoSortRule
 logCoSortRule :: Co -> CoSortRule -> TcM ()
 logCoSortRule co s = logText (group (vsep [ppr co, "-->" <+> ppr (show s)]))
 
+findCoVarTele :: MonadPlus m => CoVar -> Tele -> m HetEq
+findCoVarTele _ TeleNil                              = mzero
+findCoVarTele c (TeleBind (unrebind -> (bdr, tele))) = case bdr of
+  BdrTm{}            -> mzero
+  BdrCo c' (Embed h) -> if c `aeq` c' then pure h else findCoVarTele c tele
+
+matchingCoVar :: CoVar -> TcM HetEq
+matchingCoVar c = view tcContext >>= findCoVarTele c
+
 -- TODO separate TcM's reader layer out so that we can pass the
 -- environment in just once, instead of to every element of the list
 inferCoSortRules :: Co -> [(CoSortRule, TcM HetEq)]
 inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl]
  where
-  co_Var  = undefined
+  co_Var = do
+    c <- match _CoVar co
+    h <- matchingCoVar c
+    ctxOk
+    pure h
 
-  co_Sym  = undefined
-    -- do
-    -- g                <- match _CoSym co
-    -- (t2, k2, k1, t1) <- match _HetEq h
-    -- inferCoSort g (_HetEq # (t1, k1, k2, t2))
-  co_Refl = undefined
-    -- do
-    -- tm                 <- match _CoRefl co
-    -- (t1, k1, k1', t1') <- match _HetEq h
-    -- -- guard (k1 == k1')
-    -- -- guard (t1 == t1')
-    -- checkTypeKind tm k1
+  co_Sym = do
+    g                <- match _CoSym co
+    h                <- inferCoSort g
+    (t2, k2, k1, t1) <- match _HetEq h
+    pure (_HetEq # (t1, k1, k2, t2))
+
+  co_Refl = do
+    tm <- match _CoRefl co
+    kd <- inferTypeKind tm
+    pure (_HetEq # (tm, kd, kd, tm))
 
 --------------------------------------------------------------------------------
 -- CtxOk
@@ -277,9 +309,6 @@ clsCevRules args@(ClsCevArgs tas tele) = [Cev_Nil |+ vec_Nil]
 -- Small-step reduction
 --------------------------------------------------------------------------------
 
-data StepEnv = StepEnv { _stepContext :: Tele , _stepRecursionDepth :: Int}
-makeLenses ''StepEnv
-
 type StepArgs = Tm
 
 data StepRule
@@ -304,13 +333,13 @@ data StepRule
   | S_FPush
   deriving Show
 
-step :: Tm -> StepM Tm
+step :: Tm -> TcM Tm
 step = buildJudgment logRule stepRules
 
-logRule :: StepArgs -> StepRule -> StepM ()
+logRule :: StepArgs -> StepRule -> TcM ()
 logRule tm s = logText (group (vsep [ppr tm, "-->" <+> ppr (show s)]))
 
-stepRules :: StepArgs -> [(StepRule, StepM Tm)]
+stepRules :: StepArgs -> [(StepRule, TcM Tm)]
 stepRules tm =
   [ S_BetaRel |+ s_BetaRel
   , S_BetaIrrel |+ s_BetaIrrel
@@ -333,7 +362,7 @@ stepRules tm =
   , S_FPush |+ s_FPush
   ]
  where
-  stepIntBinop :: (Int -> Int -> Int) -> Prism' PrimBinop () -> StepM Tm
+  stepIntBinop :: (Int -> Int -> Int) -> Prism' PrimBinop () -> TcM Tm
   stepIntBinop f p = do
     (op, l', r') <- match _TmPrimBinop tm
     match p op
@@ -368,14 +397,14 @@ stepRules tm =
 
   -- Congruence forms
 
-  congStep :: Lens' a Tm -> Prism' Tm a -> StepM Tm
+  congStep :: Lens' a Tm -> Prism' Tm a -> TcM Tm
   congStep l pr = review pr <$> do
     match pr tm >>= l step
 
-  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> StepM Tm
+  cong1 :: Field1 a a Tm Tm => Prism' Tm a -> TcM Tm
   cong1 = congStep _1
 
-  cong :: Prism' Tm Tm -> StepM Tm
+  cong :: Prism' Tm Tm -> TcM Tm
   cong            = congStep id
 
   s_App_Cong_Tm   = cong1 _TmAppTm
@@ -389,7 +418,7 @@ stepRules tm =
   s_IrrelAbs_Cong = do
     (k, body) <- match _TmIrrelLam tm
     (v, expr) <- unbind body
-    s' <- local (stepContext %~ teleSnoc (_BdrTm # (v, Irrel, k))) (step expr)
+    s' <- local (tcContext %~ teleSnoc (_BdrTm # (v, Irrel, k))) (step expr)
     pure (_TmIrrelLam # (k, bind v s'))
 
   s_Binop_Double_Cong = review _TmPrimBinop <$> do
@@ -448,20 +477,6 @@ stepRules tm =
 
     pure (_TmCast # (_TmFix # fixArg, g2)) -- fix fixArg |> g2
 
---------------------------------------------------------------------------------
--- Utils
---------------------------------------------------------------------------------
-
-type FreshT = FreshMT
-type BaseT m = ReaderT StepEnv (WriterT [LogItem Doc] m)
-type StepM = FreshT (BaseT Maybe)
-
-env :: StepEnv
-env = StepEnv {_stepContext = TeleNil, _stepRecursionDepth = 0}
-
-instance HasRecursionDepth StepEnv where
-  recursionDepth = stepRecursionDepth
-
 eval :: Tm -> IO ()
 eval = go 1
  where
@@ -476,7 +491,7 @@ applyIndents :: LogItem Doc -> Doc
 applyIndents (LogItem n (Msg d)) = indent (2 * n) d
 
 runStep :: Tm -> Maybe (Tm, [LogItem Doc])
-runStep tm = step tm & runFreshMT & flip runReaderT env & runWriterT
+runStep tm = step tm & unTcM & runFreshMT & flip runReaderT env & runWriterT
 
 substInto
   :: (Fresh m, Typeable b, Alpha c, Subst b c) => Bind (Name b) c -> b -> m c
