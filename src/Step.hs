@@ -36,6 +36,19 @@ import Pretty
 
 (|+) = (,)
 
+findTmVarTele :: MonadPlus m => TmVar -> Tele -> m (Rel, Kd)
+findTmVarTele _ TeleNil                              = mzero
+findTmVarTele t (TeleBind (unrebind -> (bdr, tele))) = case bdr of
+  BdrCo{} -> mzero
+  BdrTm t' (Embed r) (Embed k) ->
+    if t `aeq` t' then pure (r, k) else findTmVarTele t tele
+
+findCoVarTele :: MonadPlus m => CoVar -> Tele -> m HetEq
+findCoVarTele _ TeleNil                              = mzero
+findCoVarTele c (TeleBind (unrebind -> (bdr, tele))) = case bdr of
+  BdrTm{}            -> mzero
+  BdrCo c' (Embed h) -> if c `aeq` c' then pure h else findCoVarTele c tele
+
 firstWith :: (a -> Bool) -> [a] -> Maybe a
 firstWith cond [] = Nothing
 firstWith cond (x:xs) | cond x    = Just x
@@ -63,6 +76,11 @@ newtype Pico a = Pico { unPico :: FreshMT (ReaderT PicoEnv (WriterT [LogItem Doc
            , Fresh
            )
 
+matchingCoVar :: CoVar -> Pico HetEq
+matchingCoVar c = view tcContext >>= findCoVarTele c
+
+matchingTmVar :: TmVar -> Pico (Rel, Kd)
+matchingTmVar c = view tcContext >>= findTmVarTele c
 
 withTele :: Tele -> Pico a -> Pico a
 withTele ctx = local (tcContext .~ ctx)
@@ -114,8 +132,15 @@ tyConDecompRules d1 d2 h = [unimplemented]
 propOk :: HetEq -> Pico ()
 propOk h = matchRules (propOkRules h)
 
+data PropOkRule = Prop_Equality
+
 propOkRules :: HetEq -> [Pico ()]
-propOkRules h = [unimplemented]
+propOkRules h =
+  [ do
+      (t1, k1, k2, t2) <- match _HetEq h
+      checkTypeKind t1 k1
+      checkTypeKind t2 k2
+  ]
 
 --------------------------------------------------------------------------------
 -- Type formation
@@ -146,8 +171,6 @@ data TypeKindRule
   | Ty_Lam
   | Ty_Fix
   | Ty_Absurd
-  | Ty_Match
-  | Ty_Default
   deriving Show
 
 logTypeKindRule :: Ty -> TypeKindRule -> Pico ()
@@ -166,10 +189,7 @@ inferTypeKindRules ty =
   , Ty_Lam |+ ty_Lam
   , Ty_Fix |+ ty_Fix
   , Ty_Absurd |+ ty_Absurd
-  , Ty_Match |+ ty_Match
-  , Ty_Default |+ ty_Default
   ]
-
  where
   ty_Var = do
     a      <- match _TmVar ty
@@ -177,18 +197,19 @@ inferTypeKindRules ty =
     match _Rel r
     ctxOk
     pure k
-  ty_Con = unimplemented
-  ty_AppRel = unimplemented
+  ty_Con      = unimplemented
+  ty_AppRel   = unimplemented
   ty_AppIrrel = unimplemented
-  ty_CApp = unimplemented
-  ty_Pi = unimplemented
-  ty_Cast = unimplemented
-  ty_Case = unimplemented
-  ty_Lam = unimplemented
-  ty_Fix = unimplemented
+  ty_CApp     = unimplemented
+  ty_Pi       = unimplemented
+  ty_Cast     = unimplemented
+  ty_Case     = unimplemented
+  ty_Lam      = do
+    bd           <- match _TmLam ty
+    (delta, tau) <- unbind bd
+    local (tcContext %~ teleSnoc delta) (inferTypeKind tau)
+  ty_Fix    = unimplemented
   ty_Absurd = unimplemented
-  ty_Match = unimplemented
-  ty_Default = unimplemented
 
 --------------------------------------------------------------------------------
 -- CoSort: coercion formation
@@ -203,34 +224,16 @@ data CoSortRule
   | Co_Sym
   | Co_Trans
   | Co_Refl
+  | Co_Step
   deriving Show
 
 logCoSortRule :: Co -> CoSortRule -> Pico ()
 logCoSortRule co s = logText (group (vsep [ppr co, "-->" <+> ppr (show s)]))
 
-findTmVarTele :: MonadPlus m => TmVar -> Tele -> m (Rel, Kd)
-findTmVarTele _ TeleNil                              = mzero
-findTmVarTele t (TeleBind (unrebind -> (bdr, tele))) = case bdr of
-  BdrCo{} -> mzero
-  BdrTm t' (Embed r) (Embed k) ->
-    if t `aeq` t' then pure (r, k) else findTmVarTele t tele
-
-findCoVarTele :: MonadPlus m => CoVar -> Tele -> m HetEq
-findCoVarTele _ TeleNil                              = mzero
-findCoVarTele c (TeleBind (unrebind -> (bdr, tele))) = case bdr of
-  BdrTm{}            -> mzero
-  BdrCo c' (Embed h) -> if c `aeq` c' then pure h else findCoVarTele c tele
-
-matchingCoVar :: CoVar -> Pico HetEq
-matchingCoVar c = view tcContext >>= findCoVarTele c
-
-matchingTmVar :: TmVar -> Pico (Rel, Kd)
-matchingTmVar c = view tcContext >>= findTmVarTele c
-
 -- TODO separate Pico's reader layer out so that we can pass the
 -- environment in just once, instead of to every element of the list
 inferCoSortRules :: Co -> [(CoSortRule, Pico HetEq)]
-inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl]
+inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl, Co_Step |+ co_Step]
  where
   co_Var = do
     c <- match _CoVar co
@@ -248,6 +251,23 @@ inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl]
     tm <- match _CoRefl co
     kd <- inferTypeKind tm
     pure (_HetEq # (tm, kd, kd, tm))
+
+  co_Step = do
+    tau <- match _CoStep co
+    tau' <- step tau
+    k <- inferTypeKind tau
+    k' <- inferTypeKind tau'
+    guard (k `aeq` k')
+    pure (_HetEq # (tau, k, k, tau'))
+
+  co_Kind = do
+    g <- match _CoKind co
+    h <- inferCoSort g
+    (t1, k1, k2, t2) <- match _HetEq h
+    -- TODO or just Type?
+    k1k <- inferTypeKind k1
+    k2k <- inferTypeKind k2
+    pure (_HetEq # (k1, k1k, k2k, k2))
 
 --------------------------------------------------------------------------------
 -- CtxOk
