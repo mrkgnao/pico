@@ -223,6 +223,7 @@ makePrisms ''PrimExp
 makePrisms ''PrimBinop
 makePrisms ''HetEq
 makePrisms ''SigElt
+makePrisms ''Rel
 
 instance AsEmpty Tele where
   _Empty = prism' (const TeleNil) $ \case 

@@ -85,6 +85,8 @@ buildJudgment
   -> m a
 buildJudgment logger rules arg = matchRulesWith (logger arg) (rules arg)
 
+unimplemented = error "unimplemented"
+
 --------------------------------------------------------------------------------
 -- Case alternative kinds
 --------------------------------------------------------------------------------
@@ -93,7 +95,7 @@ altResultKind :: TmAlt -> Kd -> Pico ()
 altResultKind alt kd = matchRules (altResultKindRules alt kd)
 
 altResultKindRules :: TmAlt -> Kd -> [Pico ()]
-altResultKindRules alt kd = []
+altResultKindRules alt kd = [unimplemented]
 
 --------------------------------------------------------------------------------
 -- Type constant kinds, with universals d1 and existentials d2
@@ -103,7 +105,7 @@ tyConDecomp :: Tele -> Tele -> Konst -> Pico ()
 tyConDecomp d1 d2 h = matchRules (tyConDecompRules d1 d2 h)
 
 tyConDecompRules :: Tele -> Tele -> Konst -> [Pico ()]
-tyConDecompRules d1 d2 h = []
+tyConDecompRules d1 d2 h = [unimplemented]
 
 --------------------------------------------------------------------------------
 -- PropOk
@@ -113,7 +115,7 @@ propOk :: HetEq -> Pico ()
 propOk h = matchRules (propOkRules h)
 
 propOkRules :: HetEq -> [Pico ()]
-propOkRules h = []
+propOkRules h = [unimplemented]
 
 --------------------------------------------------------------------------------
 -- Type formation
@@ -130,10 +132,63 @@ checkTypeKindRules ty kd =
   ]
 
 inferTypeKind :: Ty -> Pico Kd
-inferTypeKind ty = matchRules (inferTypeKindRules ty)
+inferTypeKind = buildJudgment logTypeKindRule inferTypeKindRules
 
-inferTypeKindRules :: Ty -> [Pico Kd]
-inferTypeKindRules ty = []
+data TypeKindRule
+  = Ty_Var
+  | Ty_Con
+  | Ty_AppRel
+  | Ty_AppIrrel
+  | Ty_CApp
+  | Ty_Pi
+  | Ty_Cast
+  | Ty_Case
+  | Ty_Lam
+  | Ty_Fix
+  | Ty_Absurd
+  | Ty_Match
+  | Ty_Default
+  deriving Show
+
+logTypeKindRule :: Ty -> TypeKindRule -> Pico ()
+logTypeKindRule ty s = logText (group (vsep [ppr ty, "-->" <+> ppr (show s)]))
+
+inferTypeKindRules :: Ty -> [(TypeKindRule, Pico Kd)]
+inferTypeKindRules ty =
+  [ Ty_Var |+ ty_Var
+  , Ty_Con |+ ty_Con
+  , Ty_AppRel |+ ty_AppRel
+  , Ty_AppIrrel |+ ty_AppIrrel
+  , Ty_CApp |+ ty_CApp
+  , Ty_Pi |+ ty_Pi
+  , Ty_Cast |+ ty_Cast
+  , Ty_Case |+ ty_Case
+  , Ty_Lam |+ ty_Lam
+  , Ty_Fix |+ ty_Fix
+  , Ty_Absurd |+ ty_Absurd
+  , Ty_Match |+ ty_Match
+  , Ty_Default |+ ty_Default
+  ]
+
+ where
+  ty_Var = do
+    a      <- match _TmVar ty
+    (r, k) <- matchingTmVar a
+    match _Rel r
+    ctxOk
+    pure k
+  ty_Con = unimplemented
+  ty_AppRel = unimplemented
+  ty_AppIrrel = unimplemented
+  ty_CApp = unimplemented
+  ty_Pi = unimplemented
+  ty_Cast = unimplemented
+  ty_Case = unimplemented
+  ty_Lam = unimplemented
+  ty_Fix = unimplemented
+  ty_Absurd = unimplemented
+  ty_Match = unimplemented
+  ty_Default = unimplemented
 
 --------------------------------------------------------------------------------
 -- CoSort: coercion formation
@@ -153,6 +208,13 @@ data CoSortRule
 logCoSortRule :: Co -> CoSortRule -> Pico ()
 logCoSortRule co s = logText (group (vsep [ppr co, "-->" <+> ppr (show s)]))
 
+findTmVarTele :: MonadPlus m => TmVar -> Tele -> m (Rel, Kd)
+findTmVarTele _ TeleNil                              = mzero
+findTmVarTele t (TeleBind (unrebind -> (bdr, tele))) = case bdr of
+  BdrCo{} -> mzero
+  BdrTm t' (Embed r) (Embed k) ->
+    if t `aeq` t' then pure (r, k) else findTmVarTele t tele
+
 findCoVarTele :: MonadPlus m => CoVar -> Tele -> m HetEq
 findCoVarTele _ TeleNil                              = mzero
 findCoVarTele c (TeleBind (unrebind -> (bdr, tele))) = case bdr of
@@ -161,6 +223,9 @@ findCoVarTele c (TeleBind (unrebind -> (bdr, tele))) = case bdr of
 
 matchingCoVar :: CoVar -> Pico HetEq
 matchingCoVar c = view tcContext >>= findCoVarTele c
+
+matchingTmVar :: TmVar -> Pico (Rel, Kd)
+matchingTmVar c = view tcContext >>= findTmVarTele c
 
 -- TODO separate Pico's reader layer out so that we can pass the
 -- environment in just once, instead of to every element of the list
