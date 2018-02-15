@@ -256,6 +256,7 @@ data CoSortRule
   | Co_Trans
   | Co_Refl
   | Co_Step
+  | Co_Fix
   deriving Show
 
 logCoSortRule :: Co -> CoSortRule -> Pico ()
@@ -264,7 +265,7 @@ logCoSortRule co s = logText (group (vsep [ppr co, "-->" <+> ppr (show s)]))
 -- TODO separate Pico's reader layer out so that we can pass the
 -- environment in just once, instead of to every element of the list
 inferCoSortRules :: Co -> [(CoSortRule, Pico HetEq)]
-inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl, Co_Step |+ co_Step]
+inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl, Co_Step |+ co_Step, Co_Fix |+ co_Fix]
  where
   co_Var = do
     c <- match _CoVar co
@@ -299,6 +300,17 @@ inferCoSortRules co = [Co_Var |+ co_Var, Co_Sym |+ co_Sym, Co_Refl |+ co_Refl, C
     k1k <- inferTypeKind k1
     k2k <- inferTypeKind k2
     pure (_HetEq # (k1, k1k, k2k, k2))
+
+  co_Fix = do
+    g <- match _CoFix co
+    h <- inferCoSort g
+    (t1, _, _, t2) <- match _HetEq h
+    let 
+      ft1 = _TmFix # t1
+      ft2 = _TmFix # t2
+    k1 <- inferTypeKind ft1
+    k2 <- inferTypeKind ft2
+    pure (_HetEq # (ft1, k1, k2, ft2))
 
 --------------------------------------------------------------------------------
 -- CtxOk
